@@ -142,26 +142,53 @@ export const validateForgotPassword = [
 ];
 
 /**
- * Validation rules for password reset with OTP
+ * Password Reset Flow Validation
  */
-export const validatePasswordReset = [
+
+// Validate forgot password request
+export const validateForgotPasswordRequest = [
   body("email")
     .isEmail()
-    .withMessage("Must be a valid email address")
-    .normalizeEmail(),
+    .withMessage("Please enter a valid email address")
+    .normalizeEmail()
+    .isLength({ max: 255 })
+    .withMessage("Email must not exceed 255 characters"),
+
+  handleValidationErrors,
+];
+
+// Validate OTP verification
+export const validateOTPVerification = [
+  body("email")
+    .isEmail()
+    .withMessage("Please enter a valid email address")
+    .normalizeEmail()
+    .isLength({ max: 255 })
+    .withMessage("Email must not exceed 255 characters"),
 
   body("otp")
-    .isLength({ min: 6, max: 6 })
-    .withMessage("OTP must be exactly 6 characters")
+    .isLength({ min: 4, max: 4 })
+    .withMessage("OTP must be exactly 4 digits")
     .isNumeric()
     .withMessage("OTP must contain only numbers"),
 
+  handleValidationErrors,
+];
+
+// Validate password reset
+export const validatePasswordReset = [
+  body("resetToken")
+    .notEmpty()
+    .withMessage("Reset token is required")
+    .isLength({ max: 500 })
+    .withMessage("Invalid reset token"),
+
   body("newPassword")
     .isLength({ min: 8, max: 128 })
-    .withMessage("New password must be between 8 and 128 characters")
+    .withMessage("Password must be between 8 and 128 characters")
     .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]/)
     .withMessage(
-      "New password must contain at least one uppercase letter, one lowercase letter, one number, and one special character"
+      "Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character"
     ),
 
   body("confirmPassword").custom((value, { req }) => {
@@ -170,6 +197,18 @@ export const validatePasswordReset = [
     }
     return true;
   }),
+
+  handleValidationErrors,
+];
+
+// Validate resend OTP request
+export const validateResendOTP = [
+  body("email")
+    .isEmail()
+    .withMessage("Please enter a valid email address")
+    .normalizeEmail()
+    .isLength({ max: 255 })
+    .withMessage("Email must not exceed 255 characters"),
 
   handleValidationErrors,
 ];

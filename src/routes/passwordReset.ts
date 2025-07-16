@@ -1,59 +1,16 @@
 import { Router } from "express";
-import authController from "../controllers/authController";
 import { passwordResetController } from "../controllers/passwordResetController";
 import {
-  validateFarmerRegistration,
-  validateLogin,
   validateForgotPasswordRequest,
   validateOTPVerification,
   validatePasswordReset,
   validateResendOTP,
 } from "../middleware/validation";
-import { authenticateToken } from "../middleware/auth";
 
 const router = Router();
 
 /**
- * @route   POST /auth/register/farmer
- * @desc    Register a new farmer
- * @access  Public
- */
-router.post(
-  "/register/farmer",
-  validateFarmerRegistration,
-  authController.registerFarmer
-);
-
-/**
- * @route   POST /auth/login
- * @desc    Login user
- * @access  Public
- */
-router.post("/login", validateLogin, authController.login);
-
-/**
- * @route   POST /auth/logout
- * @desc    Logout user
- * @access  Public
- */
-router.post("/logout", authController.logout);
-
-/**
- * @route   GET /auth/me
- * @desc    Get current user profile
- * @access  Private
- */
-router.get("/me", authenticateToken, authController.getCurrentUser);
-
-/**
- * @route   POST /auth/verify-token
- * @desc    Verify if token is valid
- * @access  Public
- */
-router.post("/verify-token", authController.verifyToken);
-
-/**
- * @route   POST /auth/forgot-password
+ * @route   POST /api/auth/forgot-password
  * @desc    Request password reset (sends OTP to email)
  * @access  Public
  * @body    { email: string }
@@ -65,7 +22,7 @@ router.post(
 );
 
 /**
- * @route   POST /auth/verify-otp
+ * @route   POST /api/auth/verify-otp
  * @desc    Verify OTP for password reset
  * @access  Public
  * @body    { email: string, otp: string }
@@ -77,7 +34,7 @@ router.post(
 );
 
 /**
- * @route   POST /auth/reset-password
+ * @route   POST /api/auth/reset-password
  * @desc    Reset password using verification token
  * @access  Public
  * @body    { resetToken: string, newPassword: string, confirmPassword: string }
@@ -89,7 +46,7 @@ router.post(
 );
 
 /**
- * @route   POST /auth/resend-otp
+ * @route   POST /api/auth/resend-otp
  * @desc    Resend OTP for password reset
  * @access  Public
  * @body    { email: string }
