@@ -229,56 +229,6 @@ class PermissionService {
       throw error;
     }
   }
-
-  /**
-   * Get role with permissions
-   */
-  async getRoleWithPermissions(roleId: number): Promise<Role | null> {
-    try {
-      return await Role.findByPk(roleId, {
-        include: [
-          {
-            model: Permission,
-            as: "permissions",
-            through: { attributes: [] },
-            include: [
-              { model: Action, as: "action" },
-              { model: Resource, as: "resource" },
-            ],
-          },
-        ],
-      });
-    } catch (error) {
-      console.error("Error getting role with permissions:", error);
-      throw error;
-    }
-  }
-
-  /**
-   * Update role permissions
-   */
-  async updateRolePermissions(
-    roleId: number,
-    permissionIds: number[]
-  ): Promise<void> {
-    try {
-      // Remove existing permissions
-      await RolePermission.destroy({
-        where: { role_id: roleId },
-      });
-
-      // Add new permissions
-      const rolePermissions = permissionIds.map((permissionId) => ({
-        role_id: roleId,
-        permission_id: permissionId,
-      }));
-
-      await RolePermission.bulkCreate(rolePermissions);
-    } catch (error) {
-      console.error("Error updating role permissions:", error);
-      throw error;
-    }
-  }
 }
 
 export default new PermissionService();
