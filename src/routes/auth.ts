@@ -10,6 +10,7 @@ import {
   validateResendOTP,
 } from "../middleware/validation";
 import { authenticateToken } from "../middleware/auth";
+import permissionService from "../services/permissionService";
 
 const router = Router();
 
@@ -98,6 +99,43 @@ router.post(
   "/resend-otp",
   validateResendOTP,
   passwordResetController.resendOTP
+);
+
+/**
+ * @route   GET /auth/permissions
+ * @desc    Get current user permissions (for frontend caching)
+ * @access  Private
+ */
+router.get(
+  "/permissions",
+  authenticateToken,
+  async (req, res): Promise<void> => {
+    try {
+      if (!req.user) {
+        res.status(401).json({
+          success: false,
+          error: "User not authenticated",
+          code: "NOT_AUTHENTICATED",
+        });
+        return;
+      }
+
+      const permissionInfo = await permissionService.getUserPermissionInfo(
+        req.user.id
+      );
+
+      res.status(200).json({
+        success: true,
+        data: permissionInfo,
+      });
+    } catch (error: any) {
+      res.status(500).json({
+        success: false,
+        error: "Failed to fetch user permissions",
+        code: "FETCH_USER_PERMISSIONS_FAILED",
+      });
+    }
+  }
 );
 
 export default router;

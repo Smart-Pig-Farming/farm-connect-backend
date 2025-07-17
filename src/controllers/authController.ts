@@ -1,5 +1,6 @@
 import { Request, Response } from "express";
 import authService, { RegisterFarmerData } from "../services/authService";
+import permissionService from "../services/permissionService";
 
 class AuthController {
   /**
@@ -100,7 +101,7 @@ class AuthController {
   }
 
   /**
-   * Get current user profile
+   * Get current user profile with permissions
    */
   async getCurrentUser(req: Request, res: Response): Promise<void> {
     try {
@@ -113,10 +114,17 @@ class AuthController {
         return;
       }
 
+      // Get user permissions for frontend caching
+      const permissionInfo = await permissionService.getUserPermissionInfo(
+        req.user.id
+      );
+
       res.status(200).json({
         success: true,
         data: {
           user: req.user,
+          permissions: permissionInfo.permissions,
+          roles: permissionInfo.roles,
         },
       });
     } catch (error: any) {
