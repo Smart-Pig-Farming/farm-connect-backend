@@ -166,6 +166,54 @@ class AuthController {
       });
     }
   }
+
+  /**
+   * First-time login verification (password reset)
+   */
+  async firstTimeLoginVerification(req: Request, res: Response): Promise<void> {
+    try {
+      const { email, currentPassword, newPassword } = req.body;
+
+      // Validate required fields
+      if (!email || !currentPassword || !newPassword) {
+        res.status(400).json({
+          success: false,
+          error: "Missing required fields",
+          code: "MISSING_REQUIRED_FIELDS",
+          details: "email, currentPassword, and newPassword are required",
+        });
+        return;
+      }
+
+      // Validate new password strength
+      if (newPassword.length < 8) {
+        res.status(400).json({
+          success: false,
+          error: "Password must be at least 8 characters long",
+          code: "WEAK_PASSWORD",
+        });
+        return;
+      }
+
+      const authResponse = await authService.firstTimeLoginVerification(
+        email,
+        currentPassword,
+        newPassword
+      );
+
+      res.status(200).json({
+        success: true,
+        message: "Password updated successfully. Account verified.",
+        data: authResponse,
+      });
+    } catch (error: any) {
+      res.status(400).json({
+        success: false,
+        error: error.message,
+        code: "FIRST_TIME_VERIFICATION_FAILED",
+      });
+    }
+  }
 }
 
 export default new AuthController();

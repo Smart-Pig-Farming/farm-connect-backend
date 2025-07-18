@@ -136,6 +136,7 @@ class AuthService {
         email,
         username,
         password: hashedPassword,
+        organization: farmName,
         province,
         district,
         sector,
@@ -247,6 +248,209 @@ class AuthService {
     } catch (error) {
       throw new Error("Invalid or expired token");
     }
+  }
+
+  /**
+   * Generate a temporary password
+   */
+  generateTemporaryPassword(): string {
+    const length = 12;
+    const charset =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*";
+    let password = "";
+
+    // Ensure at least one character from each type
+    const uppercase = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    const lowercase = "abcdefghijklmnopqrstuvwxyz";
+    const numbers = "0123456789";
+    const symbols = "!@#$%^&*";
+
+    password += uppercase[Math.floor(Math.random() * uppercase.length)];
+    password += lowercase[Math.floor(Math.random() * lowercase.length)];
+    password += numbers[Math.floor(Math.random() * numbers.length)];
+    password += symbols[Math.floor(Math.random() * symbols.length)];
+
+    // Fill remaining characters
+    for (let i = password.length; i < length; i++) {
+      password += charset[Math.floor(Math.random() * charset.length)];
+    }
+
+    // Shuffle the password
+    return password
+      .split("")
+      .sort(() => Math.random() - 0.5)
+      .join("");
+  }
+
+  /**
+   * Create user by admin (with email credentials)
+   */
+  async createUserByAdmin(userData: {
+    firstname: string;
+    lastname: string;
+    email: string;
+    username: string;
+    organization?: string;
+    sector?: string;
+    district?: string;
+    province?: string;
+    role_id: number;
+    level_id?: number;
+  }): Promise<{ user: any; temporaryPassword: string; emailSent: boolean }> {
+    const {
+      firstname,
+      lastname,
+      email,
+      username,
+      organization,
+      sector,
+      district,
+      province,
+      role_id,
+      level_id,
+    } = userData;
+
+    // Check if user already exists
+    const existingUser = await User.findOne({ where: { email } });
+    if (existingUser) {
+      throw new Error("User with this email already exists");
+    }
+
+    // Generate temporary password
+    const temporaryPassword = this.generateTemporaryPassword();
+    const hashedPassword = await this.hashPassword(temporaryPassword);
+
+    // Get role info for email
+    const role = await Role.findByPk(role_id);
+    if (!role) {
+      throw new Error("Invalid role specified");
+    }
+
+    try {
+      // Create user with is_verified = false
+      const user = await User.create({
+        firstname,
+        lastname,
+        email,
+        username,
+        password: hashedPassword,
+        organization,
+        sector,
+        district,
+        province,
+        points: 0,
+        is_locked: false,
+        is_verified: false, // Admin-created users need to verify on first login
+        level_id: level_id || 1,
+        role_id,
+      });
+
+      // Try to send email with credentials
+      let emailSent = false;
+      try {
+        const { emailService } = await import("./emailService");
+        await emailService.sendUserCredentials(
+          email,
+          username,
+          temporaryPassword,
+          `${firstname} ${lastname}`,
+          role.name
+        );
+        emailSent = true;
+      } catch (emailError) {
+        console.error("Failed to send credentials email:", emailError);
+        // Don't throw error here - user was created successfully
+      }
+
+      return {
+        user: {
+          id: user.id,
+          firstname: user.firstname,
+          lastname: user.lastname,
+          email: user.email,
+          username: user.username,
+          organization: user.organization,
+          role: role.name,
+          is_verified: user.is_verified,
+        },
+        temporaryPassword: emailSent ? "[SENT_VIA_EMAIL]" : temporaryPassword,
+        emailSent,
+      };
+    } catch (error: any) {
+      throw new Error(`User creation failed: ${error.message}`);
+    }
+  }
+
+  /**
+   * First-time login verification (password reset)
+   */
+  async firstTimeLoginVerification(
+    email: string,
+    currentPassword: string,
+    newPassword: string
+  ): Promise<AuthResponse> {
+    // Find user
+    const user = await User.findOne({
+      where: { email },
+      include: [
+        {
+          model: Role,
+          as: "role",
+          attributes: ["name"],
+        },
+      ],
+    });
+
+    if (!user) {
+      throw new Error("User not found");
+    }
+
+    // Check if user is already verified
+    if (user.is_verified) {
+      throw new Error("User is already verified. Please use regular login.");
+    }
+
+    // Check if user is locked
+    if (user.is_locked) {
+      throw new Error("Account is temporarily locked. Contact administrator.");
+    }
+
+    // Verify current password
+    const isCurrentPasswordValid = await this.comparePassword(
+      currentPassword,
+      user.password
+    );
+    if (!isCurrentPasswordValid) {
+      throw new Error("Current password is incorrect");
+    }
+
+    // Hash new password
+    const hashedNewPassword = await this.hashPassword(newPassword);
+
+    // Update user: set new password and mark as verified
+    await user.update({
+      password: hashedNewPassword,
+      is_verified: true,
+    });
+
+    // Generate JWT token
+    const token = this.generateToken(user.id);
+
+    // Get user permissions
+    const permissions = await this.getUserPermissions(user.role_id);
+
+    return {
+      user: {
+        id: user.id,
+        firstname: user.firstname,
+        lastname: user.lastname,
+        email: user.email,
+        username: user.username,
+        role: (user as any).role?.name || "user",
+        permissions,
+      },
+      token,
+    };
   }
 }
 

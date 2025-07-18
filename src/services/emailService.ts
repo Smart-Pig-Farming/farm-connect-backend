@@ -165,6 +165,184 @@ class EmailService {
     `;
   }
 
+  // Send credentials to newly created user
+  async sendUserCredentials(
+    email: string,
+    username: string,
+    temporaryPassword: string,
+    fullName: string,
+    role: string
+  ): Promise<void> {
+    const mailOptions = {
+      from: {
+        name: "FarmConnect",
+        address: process.env.EMAIL_USER || "piggydata25@gmail.com",
+      },
+      to: email,
+      subject: "Welcome to FarmConnect - Your Account Credentials",
+      html: this.getUserCredentialsEmailTemplate(
+        username,
+        temporaryPassword,
+        fullName,
+        role
+      ),
+    };
+
+    try {
+      await this.transporter.sendMail(mailOptions);
+      console.log(`User credentials sent to ${email}`);
+    } catch (error) {
+      console.error("Error sending user credentials email:", error);
+      throw new Error("Failed to send user credentials email");
+    }
+  }
+
+  // Email template for user credentials
+  private getUserCredentialsEmailTemplate(
+    username: string,
+    temporaryPassword: string,
+    fullName: string,
+    role: string
+  ): string {
+    return `
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Welcome to FarmConnect</title>
+        <style>
+          body {
+            font-family: Arial, sans-serif;
+            background-color: #f5f5f5;
+            margin: 0;
+            padding: 20px;
+          }
+          .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            overflow: hidden;
+          }
+          .header {
+            background-color: #10b981;
+            color: white;
+            padding: 30px;
+            text-align: center;
+          }
+          .content {
+            padding: 30px;
+          }
+          .credentials {
+            background-color: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            padding: 20px;
+            margin: 20px 0;
+          }
+          .credential-item {
+            display: flex;
+            margin: 10px 0;
+            padding: 8px 0;
+            border-bottom: 1px solid #e2e8f0;
+          }
+          .credential-item:last-child {
+            border-bottom: none;
+          }
+          .credential-label {
+            font-weight: bold;
+            width: 120px;
+            color: #374151;
+          }
+          .credential-value {
+            color: #1f2937;
+            font-family: 'Courier New', monospace;
+            background-color: #f1f5f9;
+            padding: 4px 8px;
+            border-radius: 4px;
+          }
+          .warning {
+            background-color: #fef3c7;
+            border: 1px solid #f59e0b;
+            border-radius: 6px;
+            padding: 15px;
+            margin: 20px 0;
+          }
+          .footer {
+            background-color: #f8fafc;
+            padding: 20px;
+            text-align: center;
+            color: #6b7280;
+            border-top: 1px solid #e5e7eb;
+          }
+          .btn {
+            display: inline-block;
+            background-color: #10b981;
+            color: white;
+            padding: 12px 24px;
+            text-decoration: none;
+            border-radius: 6px;
+            margin: 20px 0;
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>Welcome to FarmConnect!</h1>
+            <p>Your account has been created successfully</p>
+          </div>
+          
+          <div class="content">
+            <h2>Hello ${fullName},</h2>
+            <p>Your ${role} account has been created by an administrator. Below are your login credentials:</p>
+            
+            <div class="credentials">
+              <div class="credential-item">
+                <span class="credential-label">Username:</span>
+                <span class="credential-value">${username}</span>
+              </div>
+              <div class="credential-item">
+                <span class="credential-label">Password:</span>
+                <span class="credential-value">${temporaryPassword}</span>
+              </div>
+              <div class="credential-item">
+                <span class="credential-label">Role:</span>
+                <span class="credential-value">${role}</span>
+              </div>
+            </div>
+            
+            <div class="warning">
+              <strong>⚠️ Important:</strong> This is a temporary password. You will be required to change it during your first login for security purposes.
+            </div>
+            
+            <p>To access your account:</p>
+            <ol>
+              <li>Visit the FarmConnect login page</li>
+              <li>Enter your username and temporary password</li>
+              <li>You'll be prompted to set a new password</li>
+              <li>Complete the password reset process</li>
+            </ol>
+            
+            <div style="text-align: center;">
+              <a href="${
+                process.env.FRONTEND_URL || "http://localhost:5174"
+              }/signin" class="btn">Login to FarmConnect</a>
+            </div>
+          </div>
+          
+          <div class="footer">
+            <p>If you have any questions, please contact your administrator.</p>
+            <p>© 2025 FarmConnect. All rights reserved.</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+  }
+
   // Test email connection
   async testConnection(): Promise<boolean> {
     try {

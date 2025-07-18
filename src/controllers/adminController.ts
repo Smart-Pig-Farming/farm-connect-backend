@@ -1,6 +1,8 @@
 import { Request, Response } from "express";
 import permissionService from "../services/permissionService";
 import roleService from "../services/roleService";
+import userService from "../services/userService";
+import authService from "../services/authService";
 import Action from "../models/Action";
 import Resource from "../models/Resource";
 import Permission from "../models/Permission";
@@ -850,6 +852,453 @@ class AdminController {
         success: false,
         error: "Failed to delete role",
         code: "DELETE_ROLE_FAILED",
+        details: error.message,
+      });
+    }
+  }
+
+  // ***** USER MANAGEMENT METHODS *****
+
+  /**
+   * Get users with pagination, search, and filtering
+   */
+  async getUsers(req: Request, res: Response): Promise<void> {
+    try {
+      const {
+        page = 1,
+        limit = 10,
+        search,
+        status = "all",
+        role,
+        roleId,
+      } = req.query;
+
+      const filters = {
+        search: search as string,
+        status: status as "all" | "active" | "locked" | "unverified",
+        role: role as string,
+        roleId: roleId ? Number(roleId) : undefined,
+      };
+
+      const pagination = {
+        page: Number(page),
+        limit: Number(limit),
+      };
+
+      const result = await userService.getUsers(filters, pagination);
+
+      res.status(200).json({
+        success: true,
+        data: result.users,
+        pagination: result.pagination,
+      });
+    } catch (error: any) {
+      res.status(500).json({
+        success: false,
+        error: "Failed to fetch users",
+        code: "FETCH_USERS_FAILED",
+        details: error.message,
+      });
+    }
+  }
+
+  /**
+   * Get user by ID
+   */
+  async getUserById(req: Request, res: Response): Promise<void> {
+    try {
+      const { id } = req.params;
+
+      if (!id || isNaN(Number(id))) {
+        res.status(400).json({
+          success: false,
+          error: "Valid user ID is required",
+          code: "INVALID_USER_ID",
+        });
+        return;
+      }
+
+      const user = await userService.getUserById(Number(id));
+
+      if (!user) {
+        res.status(404).json({
+          success: false,
+          error: "User not found",
+          code: "USER_NOT_FOUND",
+        });
+        return;
+      }
+
+      res.status(200).json({
+        success: true,
+        data: user,
+      });
+    } catch (error: any) {
+      res.status(500).json({
+        success: false,
+        error: "Failed to fetch user",
+        code: "FETCH_USER_FAILED",
+        details: error.message,
+      });
+    }
+  }
+
+  /**
+   * Create user (Admin-managed users: vet/govt/admin)
+   */
+  async createUser(req: Request, res: Response): Promise<void> {
+    try {
+      const {
+        firstname,
+        lastname,
+        email,
+        username,
+        organization,
+        sector,
+        district,
+        province,
+        role_id,
+        level_id,
+      } = req.body;
+
+      // Validate required fields
+      if (!firstname || !lastname || !email || !username || !role_id) {
+        res.status(400).json({
+          success: false,
+          error: "Missing required fields",
+          code: "MISSING_REQUIRED_FIELDS",
+          details:
+            "firstname, lastname, email, username, and role_id are required",
+        });
+        return;
+      }
+
+      // Check if email already exists
+      const emailExists = await userService.emailExists(email);
+      if (emailExists) {
+        res.status(409).json({
+          success: false,
+          error: "Email already exists",
+          code: "EMAIL_ALREADY_EXISTS",
+        });
+        return;
+      }
+
+      // Check if username already exists
+      const usernameExists = await userService.usernameExists(username);
+      if (usernameExists) {
+        res.status(409).json({
+          success: false,
+          error: "Username already exists",
+          code: "USERNAME_ALREADY_EXISTS",
+        });
+        return;
+      }
+
+      const userData = {
+        firstname,
+        lastname,
+        email,
+        username,
+        organization,
+        sector,
+        district,
+        province,
+        role_id: Number(role_id),
+        level_id: level_id ? Number(level_id) : undefined,
+      };
+
+      // Use admin user creation service
+      const result = await authService.createUserByAdmin(userData);
+
+      const response: any = {
+        success: true,
+        data: result.user,
+        message: "User created successfully",
+      };
+
+      // Include email status information
+      if (result.emailSent) {
+        response.message += " and credentials sent via email";
+      } else {
+        response.message += " but email sending failed";
+        response.warning =
+          "Email sending failed. Please provide credentials manually.";
+        response.temporaryPassword = result.temporaryPassword;
+      }
+
+      res.status(201).json(response);
+    } catch (error: any) {
+      res.status(500).json({
+        success: false,
+        error: "Failed to create user",
+        code: "CREATE_USER_FAILED",
+        details: error.message,
+      });
+    }
+  }
+
+  /**
+   * Update user
+   */
+  async updateUser(req: Request, res: Response): Promise<void> {
+    try {
+      const { id } = req.params;
+      const {
+        firstname,
+        lastname,
+        email,
+        username,
+        organization,
+        sector,
+        district,
+        province,
+        role_id,
+        level_id,
+      } = req.body;
+
+      if (!id || isNaN(Number(id))) {
+        res.status(400).json({
+          success: false,
+          error: "Valid user ID is required",
+          code: "INVALID_USER_ID",
+        });
+        return;
+      }
+
+      const userId = Number(id);
+
+      // Check if user exists
+      const existingUser = await userService.getUserById(userId);
+      if (!existingUser) {
+        res.status(404).json({
+          success: false,
+          error: "User not found",
+          code: "USER_NOT_FOUND",
+        });
+        return;
+      }
+
+      // Check if email already exists (excluding current user)
+      if (email && email !== existingUser.email) {
+        const emailExists = await userService.emailExists(email, userId);
+        if (emailExists) {
+          res.status(409).json({
+            success: false,
+            error: "Email already exists",
+            code: "EMAIL_ALREADY_EXISTS",
+          });
+          return;
+        }
+      }
+
+      // Check if username already exists (excluding current user)
+      if (username && username !== existingUser.username) {
+        const usernameExists = await userService.usernameExists(
+          username,
+          userId
+        );
+        if (usernameExists) {
+          res.status(409).json({
+            success: false,
+            error: "Username already exists",
+            code: "USERNAME_ALREADY_EXISTS",
+          });
+          return;
+        }
+      }
+
+      const userData = {
+        firstname,
+        lastname,
+        email,
+        username,
+        organization,
+        sector,
+        district,
+        province,
+        role_id: role_id ? Number(role_id) : undefined,
+        level_id: level_id ? Number(level_id) : undefined,
+      };
+
+      const user = await userService.updateUser(userId, userData);
+
+      res.status(200).json({
+        success: true,
+        data: user,
+        message: "User updated successfully",
+      });
+    } catch (error: any) {
+      res.status(500).json({
+        success: false,
+        error: "Failed to update user",
+        code: "UPDATE_USER_FAILED",
+        details: error.message,
+      });
+    }
+  }
+
+  /**
+   * Delete user
+   */
+  async deleteUser(req: Request, res: Response): Promise<void> {
+    try {
+      const { id } = req.params;
+
+      if (!id || isNaN(Number(id))) {
+        res.status(400).json({
+          success: false,
+          error: "Valid user ID is required",
+          code: "INVALID_USER_ID",
+        });
+        return;
+      }
+
+      const userId = Number(id);
+
+      // Check if user exists
+      const existingUser = await userService.getUserById(userId);
+      if (!existingUser) {
+        res.status(404).json({
+          success: false,
+          error: "User not found",
+          code: "USER_NOT_FOUND",
+        });
+        return;
+      }
+
+      const deleted = await userService.deleteUser(userId);
+
+      if (deleted) {
+        res.status(200).json({
+          success: true,
+          message: "User deleted successfully",
+        });
+      } else {
+        res.status(500).json({
+          success: false,
+          error: "Failed to delete user",
+          code: "DELETE_USER_FAILED",
+        });
+      }
+    } catch (error: any) {
+      res.status(500).json({
+        success: false,
+        error: "Failed to delete user",
+        code: "DELETE_USER_FAILED",
+        details: error.message,
+      });
+    }
+  }
+
+  /**
+   * Lock or unlock user
+   */
+  async toggleUserLock(req: Request, res: Response): Promise<void> {
+    try {
+      const { id } = req.params;
+
+      if (!id || isNaN(Number(id))) {
+        res.status(400).json({
+          success: false,
+          error: "Valid user ID is required",
+          code: "INVALID_USER_ID",
+        });
+        return;
+      }
+
+      const userId = Number(id);
+
+      // Check if user exists
+      const existingUser = await userService.getUserById(userId);
+      if (!existingUser) {
+        res.status(404).json({
+          success: false,
+          error: "User not found",
+          code: "USER_NOT_FOUND",
+        });
+        return;
+      }
+
+      const user = await userService.toggleUserLock(userId);
+
+      res.status(200).json({
+        success: true,
+        data: user,
+        message: `User ${user?.is_locked ? "locked" : "unlocked"} successfully`,
+      });
+    } catch (error: any) {
+      res.status(500).json({
+        success: false,
+        error: "Failed to toggle user lock",
+        code: "TOGGLE_USER_LOCK_FAILED",
+        details: error.message,
+      });
+    }
+  }
+
+  /**
+   * Verify user email
+   */
+  async verifyUser(req: Request, res: Response): Promise<void> {
+    try {
+      const { id } = req.params;
+
+      if (!id || isNaN(Number(id))) {
+        res.status(400).json({
+          success: false,
+          error: "Valid user ID is required",
+          code: "INVALID_USER_ID",
+        });
+        return;
+      }
+
+      const userId = Number(id);
+
+      // Check if user exists
+      const existingUser = await userService.getUserById(userId);
+      if (!existingUser) {
+        res.status(404).json({
+          success: false,
+          error: "User not found",
+          code: "USER_NOT_FOUND",
+        });
+        return;
+      }
+
+      const user = await userService.verifyUser(userId);
+
+      res.status(200).json({
+        success: true,
+        data: user,
+        message: "User verified successfully",
+      });
+    } catch (error: any) {
+      res.status(500).json({
+        success: false,
+        error: "Failed to verify user",
+        code: "VERIFY_USER_FAILED",
+        details: error.message,
+      });
+    }
+  }
+
+  /**
+   * Get user statistics
+   */
+  async getUserStats(req: Request, res: Response): Promise<void> {
+    try {
+      const stats = await userService.getUserStats();
+
+      res.status(200).json({
+        success: true,
+        data: stats,
+      });
+    } catch (error: any) {
+      res.status(500).json({
+        success: false,
+        error: "Failed to fetch user statistics",
+        code: "FETCH_USER_STATS_FAILED",
         details: error.message,
       });
     }

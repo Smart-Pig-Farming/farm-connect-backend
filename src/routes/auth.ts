@@ -102,6 +102,16 @@ router.post(
 );
 
 /**
+ * @route   POST /auth/first-time-verification
+ * @desc    First-time login verification (password reset)
+ * @access  Public
+ */
+router.post(
+  "/first-time-verification",
+  authController.firstTimeLoginVerification
+);
+
+/**
  * @route   GET /auth/permissions
  * @desc    Get current user permissions (for frontend caching)
  * @access  Private

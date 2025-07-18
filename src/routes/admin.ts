@@ -113,4 +113,62 @@ router.get(
   adminController.getUserPermissions
 );
 
+// ***** USER MANAGEMENT ROUTES *****
+
+// Get all users with pagination, search, and filtering
+router.get(
+  "/users",
+  requirePermission("MANAGE:USERS"),
+  adminController.getUsers
+);
+
+// Get user by ID
+router.get(
+  "/users/:id",
+  requirePermission("MANAGE:USERS"),
+  adminController.getUserById
+);
+
+// Create new user
+router.post(
+  "/users",
+  requirePermission("MANAGE:USERS"),
+  adminController.createUser
+);
+
+// Update user
+router.put(
+  "/users/:id",
+  requirePermission("MANAGE:USERS"),
+  adminController.updateUser
+);
+
+// Delete user
+router.delete(
+  "/users/:id",
+  requirePermission("MANAGE:USERS"),
+  adminController.deleteUser
+);
+
+// Lock/unlock user
+router.patch(
+  "/users/:id/lock",
+  requirePermission("MANAGE:USERS"),
+  adminController.toggleUserLock
+);
+
+// Verify user email
+router.patch(
+  "/users/:id/verify",
+  requirePermission("MANAGE:USERS"),
+  adminController.verifyUser
+);
+
+// Get user statistics
+router.get(
+  "/users-stats",
+  requirePermission("MANAGE:USERS"),
+  adminController.getUserStats
+);
+
 export default router;
