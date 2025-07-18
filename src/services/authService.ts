@@ -3,6 +3,7 @@ import jwt, { SignOptions } from "jsonwebtoken";
 import User from "../models/User";
 import Role from "../models/Role";
 import Farm from "../models/Farm";
+import { emailService } from "./emailService";
 
 export interface RegisterFarmerData {
   firstname: string;
@@ -27,6 +28,17 @@ export interface AuthResponse {
     permissions: string[];
   };
   token: string;
+}
+
+// Custom error class for verification required
+class VerificationRequiredError extends Error {
+  public email: string;
+
+  constructor(message: string, email: string) {
+    super(message);
+    this.name = "VerificationRequiredError";
+    this.email = email;
+  }
 }
 
 class AuthService {
@@ -213,8 +225,9 @@ class AuthService {
 
     // Check if user is verified
     if (!user.is_verified) {
-      throw new Error(
-        "Account requires verification. Please complete first-time login verification."
+      throw new VerificationRequiredError(
+        "Account requires verification. Please complete first-time login verification.",
+        user.email
       );
     }
 
@@ -382,6 +395,63 @@ class AuthService {
   }
 
   /**
+   * Resend user credentials
+   */
+  async resendUserCredentials(
+    userId: number
+  ): Promise<{ emailSent: boolean; temporaryPassword?: string }> {
+    // Find user
+    const user = await User.findOne({
+      where: { id: userId },
+      include: [
+        {
+          model: Role,
+          as: "role",
+          attributes: ["id", "name"],
+        },
+      ],
+    });
+
+    if (!user) {
+      throw new Error("User not found");
+    }
+
+    // Generate new temporary password
+    const temporaryPassword = this.generateTemporaryPassword();
+    const hashedPassword = await this.hashPassword(temporaryPassword);
+
+    // Update user password and reset verification status
+    await user.update({
+      password: hashedPassword,
+      is_verified: false, // Reset verification status
+    });
+
+    // Send credentials via email
+    let emailSent = false;
+    try {
+      const fullName = `${user.firstname} ${user.lastname}`;
+      const roleName = (user as any).role?.name || "User";
+
+      await emailService.sendUserCredentials(
+        user.email,
+        user.email, // Using email as username
+        temporaryPassword,
+        fullName,
+        roleName
+      );
+      emailSent = true;
+    } catch (error) {
+      console.error("Failed to send credentials email:", error);
+      emailSent = false;
+    }
+
+    return {
+      emailSent,
+      temporaryPassword: emailSent ? undefined : temporaryPassword,
+    };
+  }
+
+  /**
    * First-time login verification (password reset)
    */
   async firstTimeLoginVerification(
@@ -422,6 +492,68 @@ class AuthService {
     );
     if (!isCurrentPasswordValid) {
       throw new Error("Current password is incorrect");
+    }
+
+    // Hash new password
+    const hashedNewPassword = await this.hashPassword(newPassword);
+
+    // Update user: set new password and mark as verified
+    await user.update({
+      password: hashedNewPassword,
+      is_verified: true,
+    });
+
+    // Generate JWT token
+    const token = this.generateToken(user.id);
+
+    // Get user permissions
+    const permissions = await this.getUserPermissions(user.role_id);
+
+    return {
+      user: {
+        id: user.id,
+        firstname: user.firstname,
+        lastname: user.lastname,
+        email: user.email,
+        username: user.username,
+        role: (user as any).role?.name || "user",
+        permissions,
+      },
+      token,
+    };
+  }
+
+  /**
+   * First-time login verification (password reset without current password)
+   */
+  async firstTimeLoginVerificationSimple(
+    email: string,
+    newPassword: string
+  ): Promise<AuthResponse> {
+    // Find user
+    const user = await User.findOne({
+      where: { email },
+      include: [
+        {
+          model: Role,
+          as: "role",
+          attributes: ["name"],
+        },
+      ],
+    });
+
+    if (!user) {
+      throw new Error("User not found");
+    }
+
+    // Check if user is already verified
+    if (user.is_verified) {
+      throw new Error("User is already verified. Please use regular login.");
+    }
+
+    // Check if user is locked
+    if (user.is_locked) {
+      throw new Error("Account is temporarily locked. Contact administrator.");
     }
 
     // Hash new password

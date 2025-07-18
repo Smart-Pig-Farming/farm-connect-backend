@@ -66,6 +66,11 @@ class AuthController {
       // Determine status code based on error message
       let statusCode = 400;
       let errorCode = "LOGIN_FAILED";
+      let responseData: any = {
+        success: false,
+        error: error.message,
+        code: errorCode,
+      };
 
       if (error.message.includes("Invalid email or password")) {
         statusCode = 401;
@@ -76,13 +81,15 @@ class AuthController {
       } else if (error.message.includes("verification")) {
         statusCode = 403;
         errorCode = "ACCOUNT_NOT_VERIFIED";
+
+        // If it's a VerificationRequiredError, include the email
+        if (error.name === "VerificationRequiredError" && error.email) {
+          responseData.email = error.email;
+        }
       }
 
-      res.status(statusCode).json({
-        success: false,
-        error: error.message,
-        code: errorCode,
-      });
+      responseData.code = errorCode;
+      res.status(statusCode).json(responseData);
     }
   }
 
@@ -198,6 +205,56 @@ class AuthController {
       const authResponse = await authService.firstTimeLoginVerification(
         email,
         currentPassword,
+        newPassword
+      );
+
+      res.status(200).json({
+        success: true,
+        message: "Password updated successfully. Account verified.",
+        data: authResponse,
+      });
+    } catch (error: any) {
+      res.status(400).json({
+        success: false,
+        error: error.message,
+        code: "FIRST_TIME_VERIFICATION_FAILED",
+      });
+    }
+  }
+
+  /**
+   * First-time login verification (password reset without current password)
+   */
+  async firstTimeLoginVerificationSimple(
+    req: Request,
+    res: Response
+  ): Promise<void> {
+    try {
+      const { email, newPassword } = req.body;
+
+      // Validate required fields
+      if (!email || !newPassword) {
+        res.status(400).json({
+          success: false,
+          error: "Missing required fields",
+          code: "MISSING_REQUIRED_FIELDS",
+          details: "email and newPassword are required",
+        });
+        return;
+      }
+
+      // Validate new password strength
+      if (newPassword.length < 8) {
+        res.status(400).json({
+          success: false,
+          error: "Password must be at least 8 characters long",
+          code: "WEAK_PASSWORD",
+        });
+        return;
+      }
+
+      const authResponse = await authService.firstTimeLoginVerificationSimple(
+        email,
         newPassword
       );
 

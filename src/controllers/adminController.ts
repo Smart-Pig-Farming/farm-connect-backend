@@ -1303,6 +1303,63 @@ class AdminController {
       });
     }
   }
+
+  /**
+   * Resend user credentials
+   */
+  async resendUserCredentials(req: Request, res: Response): Promise<void> {
+    try {
+      const { id } = req.params;
+
+      // Validate user ID
+      if (!id || isNaN(Number(id))) {
+        res.status(400).json({
+          success: false,
+          error: "Valid user ID is required",
+          code: "INVALID_USER_ID",
+        });
+        return;
+      }
+
+      const userId = Number(id);
+
+      // Check if user exists
+      const existingUser = await userService.getUserById(userId);
+      if (!existingUser) {
+        res.status(404).json({
+          success: false,
+          error: "User not found",
+          code: "USER_NOT_FOUND",
+        });
+        return;
+      }
+
+      // Resend credentials
+      const result = await authService.resendUserCredentials(userId);
+
+      const response: any = {
+        success: true,
+        message: "Credentials resent successfully",
+      };
+
+      // Include email status information
+      if (result.emailSent) {
+        response.message = "Credentials resent via email successfully";
+      } else {
+        response.message = "Failed to resend credentials via email";
+        response.warning = "Email sending failed. Please try again.";
+      }
+
+      res.status(200).json(response);
+    } catch (error: any) {
+      res.status(500).json({
+        success: false,
+        error: "Failed to resend credentials",
+        code: "RESEND_CREDENTIALS_FAILED",
+        details: error.message,
+      });
+    }
+  }
 }
 
 export default new AdminController();

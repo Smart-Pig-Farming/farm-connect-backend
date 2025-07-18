@@ -72,6 +72,9 @@ jspm_packages/
 # DynamoDB Local files
 .dynamodb/
 
+# Debug
+./src/debug/
+
 # IDE files
 .vscode/
 .idea/

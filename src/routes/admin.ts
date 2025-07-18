@@ -164,6 +164,13 @@ router.patch(
   adminController.verifyUser
 );
 
+// Resend user credentials
+router.post(
+  "/users/:id/resend-credentials",
+  requirePermission("MANAGE:USERS"),
+  adminController.resendUserCredentials
+);
+
 // Get user statistics
 router.get(
   "/users-stats",

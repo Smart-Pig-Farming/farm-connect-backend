@@ -301,7 +301,7 @@ class EmailService {
             
             <div class="credentials">
               <div class="credential-item">
-                <span class="credential-label">Username:</span>
+                <span class="credential-label">Email:</span>
                 <span class="credential-value">${username}</span>
               </div>
               <div class="credential-item">

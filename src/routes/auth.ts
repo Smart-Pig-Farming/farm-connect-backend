@@ -102,6 +102,13 @@ router.post(
 );
 
 /**
+ * @route   POST /auth/verify-account
+ * @desc    Account verification with new password (simple)
+ * @access  Public
+ */
+router.post("/verify-account", authController.firstTimeLoginVerificationSimple);
+
+/**
  * @route   POST /auth/first-time-verification
  * @desc    First-time login verification (password reset)
  * @access  Public
