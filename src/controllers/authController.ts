@@ -1,6 +1,8 @@
 import { Request, Response } from "express";
 import authService, { RegisterFarmerData } from "../services/authService";
 import permissionService from "../services/permissionService";
+import User from "../models/User";
+import Role from "../models/Role";
 
 class AuthController {
   /**
@@ -121,18 +123,46 @@ class AuthController {
         return;
       }
 
+      // Get full user details with role information
+      const fullUser = await User.findByPk(req.user.id, {
+        include: [
+          {
+            model: Role,
+            as: "role",
+            attributes: ["name"],
+          },
+        ],
+        attributes: ["id", "firstname", "lastname", "email", "username"],
+      });
+
+      if (!fullUser) {
+        res.status(404).json({
+          success: false,
+          error: "User not found",
+          code: "USER_NOT_FOUND",
+        });
+        return;
+      }
+
       // Get user permissions for frontend caching
       const permissionInfo = await permissionService.getUserPermissionInfo(
         req.user.id
       );
 
+      // Format response to match login/register response structure
+      const userResponse = {
+        id: fullUser.id,
+        firstname: fullUser.firstname,
+        lastname: fullUser.lastname,
+        email: fullUser.email,
+        username: fullUser.username,
+        role: (fullUser as any).role?.name || "farmer",
+        permissions: permissionInfo.permissions,
+      };
+
       res.status(200).json({
         success: true,
-        data: {
-          user: req.user,
-          permissions: permissionInfo.permissions,
-          roles: permissionInfo.roles,
-        },
+        data: userResponse,
       });
     } catch (error: any) {
       res.status(500).json({

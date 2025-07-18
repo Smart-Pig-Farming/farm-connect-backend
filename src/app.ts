@@ -44,10 +44,13 @@ class App {
       // Run basic seeds (roles and levels)
       await runBasicSeeds();
 
+      //Run permission seeds
+      await runPermissionSeeds();
+
       // Permission seeds already exist, skipping to avoid conflicts
-      console.log(
-        "Permission seeds already exist, skipping to avoid conflicts"
-      );
+      // console.log(
+      //   "Permission seeds already exist, skipping to avoid conflicts"
+      // );
     } catch (error) {
       console.error("Failed to initialize database connection:", error);
       process.exit(1);
