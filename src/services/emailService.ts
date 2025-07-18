@@ -181,7 +181,7 @@ class EmailService {
       to: email,
       subject: "Welcome to FarmConnect - Your Account Credentials",
       html: this.getUserCredentialsEmailTemplate(
-        username,
+        email,
         temporaryPassword,
         fullName,
         role
