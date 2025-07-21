@@ -8,6 +8,8 @@ import {
   validateOTPVerification,
   validatePasswordReset,
   validateResendOTP,
+  validatePasswordChange,
+  validateProfileUpdate,
 } from "../middleware/validation";
 import { authenticateToken } from "../middleware/auth";
 import permissionService from "../services/permissionService";
@@ -153,6 +155,32 @@ router.get(
       });
     }
   }
+);
+
+/**
+ * @route   POST /auth/change-password
+ * @desc    Change password for authenticated user
+ * @access  Private
+ * @body    { oldPassword: string, newPassword: string, confirmPassword: string }
+ */
+router.post(
+  "/change-password",
+  authenticateToken,
+  validatePasswordChange,
+  authController.changePassword
+);
+
+/**
+ * @route   PUT /auth/profile
+ * @desc    Update own profile information
+ * @access  Private
+ * @body    { firstname?: string, lastname?: string, email?: string, province?: string, district?: string, sector?: string }
+ */
+router.put(
+  "/profile",
+  authenticateToken,
+  validateProfileUpdate,
+  authController.updateProfile
 );
 
 export default router;

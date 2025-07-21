@@ -26,6 +26,16 @@ export interface AuthResponse {
     username: string;
     role: string;
     permissions: string[];
+    organization?: string;
+    province?: string;
+    district?: string;
+    sector?: string;
+    points: number;
+    level_id: number;
+    is_verified: boolean;
+    is_locked: boolean;
+    created_at: string;
+    updated_at: string;
   };
   token: string;
 }
@@ -184,6 +194,16 @@ class AuthService {
           username: user.username,
           role: "farmer",
           permissions,
+          organization: user.organization,
+          province: user.province,
+          district: user.district,
+          sector: user.sector,
+          points: user.points,
+          level_id: user.level_id,
+          is_verified: user.is_verified,
+          is_locked: user.is_locked,
+          created_at: user.createdAt.toISOString(),
+          updated_at: user.updatedAt.toISOString(),
         },
         token,
       };
@@ -246,6 +266,16 @@ class AuthService {
         username: user.username,
         role: (user as any).role?.name || "farmer",
         permissions,
+        organization: user.organization,
+        province: user.province,
+        district: user.district,
+        sector: user.sector,
+        points: user.points,
+        level_id: user.level_id,
+        is_verified: user.is_verified,
+        is_locked: user.is_locked,
+        created_at: user.createdAt.toISOString(),
+        updated_at: user.updatedAt.toISOString(),
       },
       token,
     };
@@ -518,6 +548,16 @@ class AuthService {
         username: user.username,
         role: (user as any).role?.name || "user",
         permissions,
+        organization: user.organization,
+        province: user.province,
+        district: user.district,
+        sector: user.sector,
+        points: user.points,
+        level_id: user.level_id,
+        is_verified: user.is_verified,
+        is_locked: user.is_locked,
+        created_at: user.createdAt.toISOString(),
+        updated_at: user.updatedAt.toISOString(),
       },
       token,
     };
@@ -580,8 +620,157 @@ class AuthService {
         username: user.username,
         role: (user as any).role?.name || "user",
         permissions,
+        organization: user.organization,
+        province: user.province,
+        district: user.district,
+        sector: user.sector,
+        points: user.points,
+        level_id: user.level_id,
+        is_verified: user.is_verified,
+        is_locked: user.is_locked,
+        created_at: user.createdAt.toISOString(),
+        updated_at: user.updatedAt.toISOString(),
       },
       token,
+    };
+  }
+
+  /**
+   * Change password for authenticated user
+   */
+  async changePassword(
+    userId: number,
+    oldPassword: string,
+    newPassword: string
+  ): Promise<{ success: boolean; message: string }> {
+    // Find user
+    const user = await User.findByPk(userId);
+    if (!user) {
+      throw new Error("User not found");
+    }
+
+    // Verify old password
+    const isOldPasswordValid = await this.comparePassword(
+      oldPassword,
+      user.password
+    );
+    if (!isOldPasswordValid) {
+      throw new Error("Current password is incorrect");
+    }
+
+    // Check if new password is different from old password
+    const isSamePassword = await this.comparePassword(
+      newPassword,
+      user.password
+    );
+    if (isSamePassword) {
+      throw new Error("New password must be different from current password");
+    }
+
+    // Hash new password
+    const hashedPassword = await this.hashPassword(newPassword);
+
+    // Update password
+    await user.update({ password: hashedPassword });
+
+    return {
+      success: true,
+      message: "Password changed successfully",
+    };
+  }
+
+  /**
+   * Update user profile information
+   */
+  async updateProfile(
+    userId: number,
+    profileData: {
+      firstname?: string;
+      lastname?: string;
+      email?: string;
+      province?: string;
+      district?: string;
+      sector?: string;
+    }
+  ): Promise<{
+    success: boolean;
+    message: string;
+    user: {
+      id: number;
+      firstname: string;
+      lastname: string;
+      email: string;
+      username: string;
+      role: string;
+      permissions: string[];
+      organization?: string;
+      province?: string;
+      district?: string;
+      sector?: string;
+      points: number;
+      level_id: number;
+      is_verified: boolean;
+      is_locked: boolean;
+      created_at: string;
+      updated_at: string;
+    };
+  }> {
+    // Find user
+    const user = await User.findByPk(userId, {
+      include: [
+        {
+          model: Role,
+          as: "role",
+          attributes: ["name"],
+        },
+      ],
+    });
+
+    if (!user) {
+      throw new Error("User not found");
+    }
+
+    // Check if email is being changed and if it already exists
+    if (profileData.email && profileData.email !== user.email) {
+      const existingUser = await User.findOne({
+        where: { email: profileData.email },
+      });
+      if (existingUser) {
+        throw new Error("Email address is already in use");
+      }
+    }
+
+    // Update user profile
+    await user.update(profileData);
+
+    // Reload user with updated data
+    await user.reload();
+
+    // Get user permissions
+    const permissions = await this.getUserPermissions(user.role_id);
+
+    return {
+      success: true,
+      message: "Profile updated successfully",
+      user: {
+        id: user.id,
+        firstname: user.firstname,
+        lastname: user.lastname,
+        email: user.email,
+        username: user.username,
+        role: (user as any).role?.name || "user",
+        permissions,
+        organization: user.organization,
+        province: user.province,
+        district: user.district,
+        sector: user.sector,
+        points: user.points,
+        level_id: user.level_id,
+        is_verified: user.is_verified,
+        is_locked: user.is_locked,
+        created_at: user.createdAt.toISOString(),
+        updated_at: user.updatedAt.toISOString(),
+      },
     };
   }
 }

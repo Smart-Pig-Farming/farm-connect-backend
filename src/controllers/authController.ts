@@ -132,7 +132,24 @@ class AuthController {
             attributes: ["name"],
           },
         ],
-        attributes: ["id", "firstname", "lastname", "email", "username"],
+        // Include all user attributes for complete profile data
+        attributes: [
+          "id",
+          "firstname", 
+          "lastname", 
+          "email", 
+          "username", 
+          "organization",
+          "province",
+          "district", 
+          "sector",
+          "points",
+          "level_id",
+          "is_verified",
+          "is_locked",
+          "createdAt",
+          "updatedAt"
+        ],
       });
 
       if (!fullUser) {
@@ -158,6 +175,16 @@ class AuthController {
         username: fullUser.username,
         role: (fullUser as any).role?.name || "farmer",
         permissions: permissionInfo.permissions,
+        organization: fullUser.organization,
+        province: fullUser.province,
+        district: fullUser.district,
+        sector: fullUser.sector,
+        points: fullUser.points,
+        level_id: fullUser.level_id,
+        is_verified: fullUser.is_verified,
+        is_locked: fullUser.is_locked,
+        created_at: fullUser.createdAt.toISOString(),
+        updated_at: fullUser.updatedAt.toISOString(),
       };
 
       res.status(200).json({
@@ -298,6 +325,100 @@ class AuthController {
         success: false,
         error: error.message,
         code: "FIRST_TIME_VERIFICATION_FAILED",
+      });
+    }
+  }
+
+  /**
+   * Change password for authenticated user
+   */
+  async changePassword(req: Request, res: Response): Promise<void> {
+    try {
+      if (!req.user) {
+        res.status(401).json({
+          success: false,
+          error: "User not authenticated",
+          code: "NOT_AUTHENTICATED",
+        });
+        return;
+      }
+
+      const { oldPassword, newPassword } = req.body;
+
+      const result = await authService.changePassword(
+        req.user.id,
+        oldPassword,
+        newPassword
+      );
+
+      res.status(200).json({
+        success: true,
+        message: result.message,
+      });
+    } catch (error: any) {
+      let statusCode = 400;
+      let errorCode = "PASSWORD_CHANGE_FAILED";
+
+      if (error.message.includes("Current password is incorrect")) {
+        statusCode = 400;
+        errorCode = "INVALID_CURRENT_PASSWORD";
+      } else if (error.message.includes("User not found")) {
+        statusCode = 404;
+        errorCode = "USER_NOT_FOUND";
+      } else if (error.message.includes("New password must be different")) {
+        statusCode = 400;
+        errorCode = "SAME_PASSWORD";
+      }
+
+      res.status(statusCode).json({
+        success: false,
+        error: error.message,
+        code: errorCode,
+      });
+    }
+  }
+
+  /**
+   * Update profile for authenticated user
+   */
+  async updateProfile(req: Request, res: Response): Promise<void> {
+    try {
+      if (!req.user) {
+        res.status(401).json({
+          success: false,
+          error: "User not authenticated",
+          code: "NOT_AUTHENTICATED",
+        });
+        return;
+      }
+
+      const profileData = req.body;
+
+      const result = await authService.updateProfile(req.user.id, profileData);
+
+      res.status(200).json({
+        success: true,
+        message: result.message,
+        data: {
+          user: result.user,
+        },
+      });
+    } catch (error: any) {
+      let statusCode = 400;
+      let errorCode = "PROFILE_UPDATE_FAILED";
+
+      if (error.message.includes("User not found")) {
+        statusCode = 404;
+        errorCode = "USER_NOT_FOUND";
+      } else if (error.message.includes("Email address is already in use")) {
+        statusCode = 409;
+        errorCode = "EMAIL_ALREADY_EXISTS";
+      }
+
+      res.status(statusCode).json({
+        success: false,
+        error: error.message,
+        code: errorCode,
       });
     }
   }

@@ -130,6 +130,53 @@ export const validatePasswordChange = [
 ];
 
 /**
+ * Validation rules for profile update
+ */
+export const validateProfileUpdate = [
+  body("firstname")
+    .optional()
+    .trim()
+    .isLength({ min: 2, max: 50 })
+    .withMessage("First name must be between 2 and 50 characters")
+    .matches(/^[a-zA-Z\s]+$/)
+    .withMessage("First name can only contain letters and spaces"),
+
+  body("lastname")
+    .optional()
+    .trim()
+    .isLength({ min: 2, max: 50 })
+    .withMessage("Last name must be between 2 and 50 characters")
+    .matches(/^[a-zA-Z\s]+$/)
+    .withMessage("Last name can only contain letters and spaces"),
+
+  body("email")
+    .optional()
+    .isEmail()
+    .withMessage("Must be a valid email address")
+    .normalizeEmail(),
+
+  body("province")
+    .optional()
+    .trim()
+    .isLength({ min: 2, max: 100 })
+    .withMessage("Province must be between 2 and 100 characters"),
+
+  body("district")
+    .optional()
+    .trim()
+    .isLength({ min: 2, max: 100 })
+    .withMessage("District must be between 2 and 100 characters"),
+
+  body("sector")
+    .optional()
+    .trim()
+    .isLength({ min: 2, max: 100 })
+    .withMessage("Sector must be between 2 and 100 characters"),
+
+  handleValidationErrors,
+];
+
+/**
  * Validation rules for forgot password
  */
 export const validateForgotPassword = [
