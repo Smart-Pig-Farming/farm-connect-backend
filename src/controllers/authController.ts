@@ -1,8 +1,18 @@
 import { Request, Response } from "express";
 import authService, { RegisterFarmerData } from "../services/authService";
+import { getCookieConfig, clearCookieConfig } from "../config/cookieConfig";
 import permissionService from "../services/permissionService";
 import User from "../models/User";
 import Role from "../models/Role";
+
+interface ExtendedRequest extends Request {
+  user?: {
+    id: number;
+    email: string;
+    role: string;
+    permissions: string[];
+  };
+}
 
 class AuthController {
   /**
@@ -10,36 +20,48 @@ class AuthController {
    */
   async registerFarmer(req: Request, res: Response): Promise<void> {
     try {
-      const {
-        firstname,
-        lastname,
-        email,
-        password,
-        farmName,
-        province,
-        district,
-        sector,
-        field,
-      } = req.body;
-
       const registrationData: RegisterFarmerData = {
-        firstname,
-        lastname,
-        email,
-        password,
-        farmName,
-        province,
-        district,
-        sector,
-        field,
+        email: req.body.email,
+        password: req.body.password,
+        firstname: req.body.firstName,
+        lastname: req.body.lastName,
+        farmName: req.body.farmDetails?.farmName || req.body.farmName || "",
+        province: req.body.farmDetails?.province || req.body.province || "",
+        district: req.body.farmDetails?.district || req.body.district || "",
+        sector: req.body.farmDetails?.sector || req.body.sector || "",
       };
 
-      const authResponse = await authService.registerFarmer(registrationData);
+      const deviceInfo = req.headers["user-agent"] || "Unknown";
+      const ipAddress = req.ip || req.connection.remoteAddress || "Unknown";
+
+      const authResponse = await authService.registerFarmer(
+        registrationData,
+        deviceInfo,
+        ipAddress
+      );
+
+      // Set secure cookies
+      const cookieConfig = getCookieConfig();
+      res.cookie(
+        "accessToken",
+        authResponse.tokens.accessToken,
+        cookieConfig.accessToken
+      );
+      res.cookie(
+        "refreshToken",
+        authResponse.tokens.refreshToken,
+        cookieConfig.refreshToken
+      );
+      res.cookie(
+        "csrfToken",
+        authResponse.tokens.csrfToken,
+        cookieConfig.csrfToken
+      );
 
       res.status(201).json({
         success: true,
         message: "Farmer registered successfully",
-        data: authResponse,
+        data: { user: authResponse.user },
       });
     } catch (error: any) {
       res.status(400).json({
@@ -51,68 +73,161 @@ class AuthController {
   }
 
   /**
-   * Login user
+   * Login with secure cookies
    */
   async login(req: Request, res: Response): Promise<void> {
     try {
       const { email, password } = req.body;
 
-      const authResponse = await authService.login(email, password);
+      const deviceInfo = req.headers["user-agent"] || "Unknown";
+      const ipAddress = req.ip || req.connection.remoteAddress || "Unknown";
+
+      const authResponse = await authService.login(
+        email,
+        password,
+        deviceInfo,
+        ipAddress
+      );
+
+      // Set secure cookies
+      const cookieConfig = getCookieConfig();
+      res.cookie(
+        "accessToken",
+        authResponse.tokens.accessToken,
+        cookieConfig.accessToken
+      );
+      res.cookie(
+        "refreshToken",
+        authResponse.tokens.refreshToken,
+        cookieConfig.refreshToken
+      );
+      res.cookie(
+        "csrfToken",
+        authResponse.tokens.csrfToken,
+        cookieConfig.csrfToken
+      );
 
       res.status(200).json({
         success: true,
         message: "Login successful",
-        data: authResponse,
+        data: { user: authResponse.user },
       });
     } catch (error: any) {
       // Determine status code based on error message
       let statusCode = 400;
       let errorCode = "LOGIN_FAILED";
-      let responseData: any = {
-        success: false,
-        error: error.message,
-        code: errorCode,
-      };
 
       if (error.message.includes("Invalid email or password")) {
         statusCode = 401;
         errorCode = "INVALID_CREDENTIALS";
       } else if (error.message.includes("locked")) {
-        statusCode = 403;
+        statusCode = 423;
         errorCode = "ACCOUNT_LOCKED";
-      } else if (error.message.includes("verification")) {
+      } else if (error.message.includes("verified")) {
         statusCode = 403;
         errorCode = "ACCOUNT_NOT_VERIFIED";
-
-        // If it's a VerificationRequiredError, include the email
-        if (error.name === "VerificationRequiredError" && error.email) {
-          responseData.email = error.email;
-        }
       }
 
-      responseData.code = errorCode;
-      res.status(statusCode).json(responseData);
+      res.status(statusCode).json({
+        success: false,
+        error: error.message,
+        code: errorCode,
+      });
     }
   }
 
   /**
-   * Logout user (client-side token invalidation)
+   * Refresh access token using refresh token
    */
-  async logout(req: Request, res: Response): Promise<void> {
-    // In a JWT-based system, logout is typically handled client-side
-    // by removing the token from storage. However, we can implement
-    // token blacklisting here if needed in the future.
+  async refreshToken(req: Request, res: Response): Promise<void> {
+    try {
+      const refreshToken = req.cookies.refreshToken;
 
-    res.status(200).json({
-      success: true,
-      message: "Logout successful",
-    });
+      if (!refreshToken) {
+        res.status(401).json({
+          success: false,
+          error: "Refresh token not provided",
+          code: "MISSING_REFRESH_TOKEN",
+        });
+        return;
+      }
+
+      const deviceInfo = req.headers["user-agent"] || "Unknown";
+      const ipAddress = req.ip || req.connection.remoteAddress || "Unknown";
+
+      const tokenPair = await authService.refreshTokens(
+        refreshToken,
+        deviceInfo,
+        ipAddress
+      );
+
+      // Set new secure cookies
+      const cookieConfig = getCookieConfig();
+      res.cookie(
+        "accessToken",
+        tokenPair.accessToken,
+        cookieConfig.accessToken
+      );
+      res.cookie(
+        "refreshToken",
+        tokenPair.refreshToken,
+        cookieConfig.refreshToken
+      );
+      res.cookie("csrfToken", tokenPair.csrfToken, cookieConfig.csrfToken);
+
+      res.status(200).json({
+        success: true,
+        message: "Token refreshed successfully",
+      });
+    } catch (error: any) {
+      // Clear cookies on refresh failure
+      res.clearCookie("accessToken", clearCookieConfig);
+      res.clearCookie("refreshToken", clearCookieConfig);
+      res.clearCookie("csrfToken", clearCookieConfig);
+
+      res.status(401).json({
+        success: false,
+        error: error.message,
+        code: "TOKEN_REFRESH_FAILED",
+      });
+    }
   }
 
   /**
-   * Get current user profile with permissions
+   * Logout user and clear tokens
    */
-  async getCurrentUser(req: Request, res: Response): Promise<void> {
+  async logout(req: Request, res: Response): Promise<void> {
+    try {
+      const refreshToken = req.cookies.refreshToken;
+
+      if (refreshToken) {
+        await authService.logout(refreshToken);
+      }
+
+      // Clear all auth cookies
+      res.clearCookie("accessToken", clearCookieConfig);
+      res.clearCookie("refreshToken", clearCookieConfig);
+      res.clearCookie("csrfToken", clearCookieConfig);
+
+      res.status(200).json({
+        message: "Logged out successfully",
+      });
+    } catch (error: any) {
+      // Clear cookies even on error
+      res.clearCookie("accessToken", clearCookieConfig);
+      res.clearCookie("refreshToken", clearCookieConfig);
+      res.clearCookie("csrfToken", clearCookieConfig);
+
+      res.status(200).json({
+        message: "Logged out successfully",
+      });
+    }
+  }
+
+  /**
+   * Get current user profile
+   */
+  async getProfile(req: ExtendedRequest, res: Response): Promise<void> {
     try {
       if (!req.user) {
         res.status(401).json({
@@ -123,36 +238,12 @@ class AuthController {
         return;
       }
 
-      // Get full user details with role information
-      const fullUser = await User.findByPk(req.user.id, {
-        include: [
-          {
-            model: Role,
-            as: "role",
-            attributes: ["name"],
-          },
-        ],
-        // Include all user attributes for complete profile data
-        attributes: [
-          "id",
-          "firstname", 
-          "lastname", 
-          "email", 
-          "username", 
-          "organization",
-          "province",
-          "district", 
-          "sector",
-          "points",
-          "level_id",
-          "is_verified",
-          "is_locked",
-          "createdAt",
-          "updatedAt"
-        ],
+      const user = await User.findByPk(req.user.id, {
+        include: [{ model: Role, as: "role", attributes: ["name"] }],
+        attributes: { exclude: ["password"] },
       });
 
-      if (!fullUser) {
+      if (!user) {
         res.status(404).json({
           success: false,
           error: "User not found",
@@ -161,264 +252,213 @@ class AuthController {
         return;
       }
 
-      // Get user permissions for frontend caching
-      const permissionInfo = await permissionService.getUserPermissionInfo(
-        req.user.id
-      );
-
-      // Format response to match login/register response structure
-      const userResponse = {
-        id: fullUser.id,
-        firstname: fullUser.firstname,
-        lastname: fullUser.lastname,
-        email: fullUser.email,
-        username: fullUser.username,
-        role: (fullUser as any).role?.name || "farmer",
-        permissions: permissionInfo.permissions,
-        organization: fullUser.organization,
-        province: fullUser.province,
-        district: fullUser.district,
-        sector: fullUser.sector,
-        points: fullUser.points,
-        level_id: fullUser.level_id,
-        is_verified: fullUser.is_verified,
-        is_locked: fullUser.is_locked,
-        created_at: fullUser.createdAt.toISOString(),
-        updated_at: fullUser.updatedAt.toISOString(),
+      // Format user data to match frontend expectations
+      const formattedUser = {
+        id: user.id,
+        firstname: user.firstname,
+        lastname: user.lastname,
+        email: user.email,
+        username: user.username,
+        role: (user as any).role?.name || "farmer", // Extract role name from association
+        organization: user.organization,
+        province: user.province,
+        district: user.district,
+        sector: user.sector,
+        points: user.points,
+        level_id: user.level_id,
+        is_verified: user.is_verified,
+        is_locked: user.is_locked,
+        permissions: req.user.permissions, // Use permissions from JWT
+        created_at: user.createdAt.toISOString(),
+        updated_at: user.updatedAt.toISOString(),
       };
 
       res.status(200).json({
         success: true,
-        data: userResponse,
+        data: formattedUser,
       });
     } catch (error: any) {
       res.status(500).json({
         success: false,
-        error: "Failed to get user profile",
-        code: "GET_PROFILE_FAILED",
+        error: error.message,
+        code: "PROFILE_FETCH_FAILED",
       });
     }
   }
 
   /**
-   * Verify token endpoint
+   * Update user profile
    */
-  async verifyToken(req: Request, res: Response): Promise<void> {
+  async updateProfile(req: ExtendedRequest, res: Response): Promise<void> {
     try {
-      const { token } = req.body;
-
-      if (!token) {
-        res.status(400).json({
+      if (!req.user) {
+        res.status(401).json({
           success: false,
-          error: "Token is required",
-          code: "TOKEN_REQUIRED",
+          error: "User not authenticated",
+          code: "NOT_AUTHENTICATED",
         });
         return;
       }
 
-      await authService.verifyToken(token);
+      const { firstName, lastName, email } = req.body;
+
+      const user = await User.findByPk(req.user.id);
+      if (!user) {
+        res.status(404).json({
+          success: false,
+          error: "User not found",
+          code: "USER_NOT_FOUND",
+        });
+        return;
+      }
+
+      await user.update({
+        firstname: firstName,
+        lastname: lastName,
+        email,
+      });
+
+      const updatedUser = await User.findByPk(req.user.id, {
+        include: [{ model: Role, as: "role" }],
+        attributes: { exclude: ["password"] },
+      });
 
       res.status(200).json({
         success: true,
-        message: "Token is valid",
+        message: "Profile updated successfully",
+        data: { user: updatedUser },
       });
     } catch (error: any) {
-      res.status(401).json({
+      res.status(400).json({
         success: false,
-        error: "Invalid or expired token",
-        code: "INVALID_TOKEN",
+        error: error.message,
+        code: "PROFILE_UPDATE_FAILED",
       });
     }
   }
 
   /**
-   * First-time login verification (password reset)
+   * Change password
    */
-  async firstTimeLoginVerification(req: Request, res: Response): Promise<void> {
+  async changePassword(req: ExtendedRequest, res: Response): Promise<void> {
     try {
-      const { email, currentPassword, newPassword } = req.body;
-
-      // Validate required fields
-      if (!email || !currentPassword || !newPassword) {
-        res.status(400).json({
+      if (!req.user) {
+        res.status(401).json({
           success: false,
-          error: "Missing required fields",
-          code: "MISSING_REQUIRED_FIELDS",
-          details: "email, currentPassword, and newPassword are required",
+          error: "User not authenticated",
+          code: "NOT_AUTHENTICATED",
         });
         return;
       }
 
-      // Validate new password strength
-      if (newPassword.length < 8) {
-        res.status(400).json({
-          success: false,
-          error: "Password must be at least 8 characters long",
-          code: "WEAK_PASSWORD",
-        });
-        return;
-      }
+      const { currentPassword, newPassword } = req.body;
 
-      const authResponse = await authService.firstTimeLoginVerification(
-        email,
+      await authService.changePassword(
+        req.user.id,
         currentPassword,
         newPassword
       );
 
       res.status(200).json({
         success: true,
-        message: "Password updated successfully. Account verified.",
-        data: authResponse,
+        message: "Password changed successfully",
       });
     } catch (error: any) {
       res.status(400).json({
         success: false,
         error: error.message,
-        code: "FIRST_TIME_VERIFICATION_FAILED",
+        code: "PASSWORD_CHANGE_FAILED",
       });
     }
   }
 
   /**
-   * First-time login verification (password reset without current password)
+   * Get user permissions
    */
-  async firstTimeLoginVerificationSimple(
-    req: Request,
-    res: Response
-  ): Promise<void> {
+  async getPermissions(req: ExtendedRequest, res: Response): Promise<void> {
+    try {
+      if (!req.user) {
+        res.status(401).json({
+          success: false,
+          error: "User not authenticated",
+          code: "NOT_AUTHENTICATED",
+        });
+        return;
+      }
+
+      const permissions = await permissionService.getUserPermissions(
+        req.user.id
+      );
+
+      res.status(200).json({
+        success: true,
+        message: "Permissions retrieved successfully",
+        data: { permissions },
+      });
+    } catch (error: any) {
+      res.status(500).json({
+        success: false,
+        error: error.message,
+        code: "PERMISSIONS_FETCH_FAILED",
+      });
+    }
+  }
+
+  /**
+   * Verify account with new password (first-time login)
+   */
+  async verifyAccount(req: Request, res: Response): Promise<void> {
     try {
       const { email, newPassword } = req.body;
 
-      // Validate required fields
       if (!email || !newPassword) {
         res.status(400).json({
           success: false,
-          error: "Missing required fields",
-          code: "MISSING_REQUIRED_FIELDS",
-          details: "email and newPassword are required",
+          error: "Email and new password are required",
+          code: "MISSING_FIELDS",
         });
         return;
       }
 
-      // Validate new password strength
-      if (newPassword.length < 8) {
-        res.status(400).json({
-          success: false,
-          error: "Password must be at least 8 characters long",
-          code: "WEAK_PASSWORD",
-        });
-        return;
-      }
+      const deviceInfo = req.headers["user-agent"] || "Unknown";
+      const ipAddress = req.ip || req.connection.remoteAddress || "Unknown";
 
+      // Use the existing firstTimeLoginVerificationSimple method
       const authResponse = await authService.firstTimeLoginVerificationSimple(
         email,
-        newPassword
+        newPassword,
+        deviceInfo,
+        ipAddress
+      );
+
+      // Set secure cookies
+      const cookieConfig = getCookieConfig();
+      res.cookie(
+        "accessToken",
+        authResponse.tokens.accessToken,
+        cookieConfig.accessToken
+      );
+      res.cookie(
+        "refreshToken",
+        authResponse.tokens.refreshToken,
+        cookieConfig.refreshToken
+      );
+      res.cookie(
+        "csrfToken",
+        authResponse.tokens.csrfToken,
+        cookieConfig.csrfToken
       );
 
       res.status(200).json({
         success: true,
-        message: "Password updated successfully. Account verified.",
-        data: authResponse,
+        message: "Account verified successfully",
+        data: { user: authResponse.user },
       });
     } catch (error: any) {
       res.status(400).json({
         success: false,
         error: error.message,
-        code: "FIRST_TIME_VERIFICATION_FAILED",
-      });
-    }
-  }
-
-  /**
-   * Change password for authenticated user
-   */
-  async changePassword(req: Request, res: Response): Promise<void> {
-    try {
-      if (!req.user) {
-        res.status(401).json({
-          success: false,
-          error: "User not authenticated",
-          code: "NOT_AUTHENTICATED",
-        });
-        return;
-      }
-
-      const { oldPassword, newPassword } = req.body;
-
-      const result = await authService.changePassword(
-        req.user.id,
-        oldPassword,
-        newPassword
-      );
-
-      res.status(200).json({
-        success: true,
-        message: result.message,
-      });
-    } catch (error: any) {
-      let statusCode = 400;
-      let errorCode = "PASSWORD_CHANGE_FAILED";
-
-      if (error.message.includes("Current password is incorrect")) {
-        statusCode = 400;
-        errorCode = "INVALID_CURRENT_PASSWORD";
-      } else if (error.message.includes("User not found")) {
-        statusCode = 404;
-        errorCode = "USER_NOT_FOUND";
-      } else if (error.message.includes("New password must be different")) {
-        statusCode = 400;
-        errorCode = "SAME_PASSWORD";
-      }
-
-      res.status(statusCode).json({
-        success: false,
-        error: error.message,
-        code: errorCode,
-      });
-    }
-  }
-
-  /**
-   * Update profile for authenticated user
-   */
-  async updateProfile(req: Request, res: Response): Promise<void> {
-    try {
-      if (!req.user) {
-        res.status(401).json({
-          success: false,
-          error: "User not authenticated",
-          code: "NOT_AUTHENTICATED",
-        });
-        return;
-      }
-
-      const profileData = req.body;
-
-      const result = await authService.updateProfile(req.user.id, profileData);
-
-      res.status(200).json({
-        success: true,
-        message: result.message,
-        data: {
-          user: result.user,
-        },
-      });
-    } catch (error: any) {
-      let statusCode = 400;
-      let errorCode = "PROFILE_UPDATE_FAILED";
-
-      if (error.message.includes("User not found")) {
-        statusCode = 404;
-        errorCode = "USER_NOT_FOUND";
-      } else if (error.message.includes("Email address is already in use")) {
-        statusCode = 409;
-        errorCode = "EMAIL_ALREADY_EXISTS";
-      }
-
-      res.status(statusCode).json({
-        success: false,
-        error: error.message,
-        code: errorCode,
+        code: "ACCOUNT_VERIFICATION_FAILED",
       });
     }
   }

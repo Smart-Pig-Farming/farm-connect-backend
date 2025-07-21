@@ -1,12 +1,12 @@
 import { Router } from "express";
 import adminController from "../controllers/adminController";
 import { requirePermission } from "../middleware/permissions";
-import { authenticateToken } from "../middleware/auth";
+import { authenticateWithCookies } from "../middleware/cookieAuth";
 
 const router = Router();
 
 // All admin routes require authentication
-router.use(authenticateToken);
+router.use(authenticateWithCookies);
 
 // Routes for actions, resources, and permissions metadata
 router.get(

@@ -25,14 +25,14 @@ export const handleValidationErrors = (
  * Validation rules for farmer registration
  */
 export const validateFarmerRegistration = [
-  body("firstname")
+  body("firstName")
     .trim()
     .isLength({ min: 2, max: 50 })
     .withMessage("First name must be between 2 and 50 characters")
     .matches(/^[a-zA-Z\s]+$/)
     .withMessage("First name must contain only letters and spaces"),
 
-  body("lastname")
+  body("lastName")
     .trim()
     .isLength({ min: 2, max: 50 })
     .withMessage("Last name must be between 2 and 50 characters")

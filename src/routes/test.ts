@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { authenticateToken } from "../middleware/auth";
+import { authenticateWithCookies } from "../middleware/cookieAuth";
 import { requirePermission } from "../middleware/permissions";
 import {
   ACTIONS,
@@ -10,7 +10,7 @@ import {
 const router = Router();
 
 // All test routes require authentication
-router.use(authenticateToken);
+router.use(authenticateWithCookies);
 
 /**
  * @route   GET /test/permissions

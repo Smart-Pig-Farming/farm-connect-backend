@@ -122,6 +122,9 @@ class UserService {
       // Role filtering
       if (filters.roleId) {
         where.role_id = filters.roleId;
+      } else if (filters.role && filters.role !== "all") {
+        // Add filtering by role name using include where clause
+        // This will be handled in the include section below
       }
 
       // Query options
@@ -135,6 +138,11 @@ class UserService {
             model: Role,
             as: "role",
             attributes: ["id", "name", "description"],
+            where:
+              filters.role && filters.role !== "all"
+                ? { name: filters.role }
+                : undefined,
+            required: filters.role && filters.role !== "all" ? true : false,
           },
           {
             model: Level,

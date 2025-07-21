@@ -1,9 +1,14 @@
 import bcrypt from "bcryptjs";
 import jwt, { SignOptions } from "jsonwebtoken";
+import crypto from "crypto";
+import { Op } from "sequelize";
 import User from "../models/User";
 import Role from "../models/Role";
+import Permission from "../models/Permission";
 import Farm from "../models/Farm";
+import RefreshToken from "../models/RefreshToken";
 import { emailService } from "./emailService";
+import permissionService from "./permissionService";
 
 export interface RegisterFarmerData {
   firstname: string;
@@ -15,6 +20,12 @@ export interface RegisterFarmerData {
   district: string;
   sector: string;
   field?: string;
+}
+
+export interface TokenPair {
+  accessToken: string;
+  refreshToken: string;
+  csrfToken: string;
 }
 
 export interface AuthResponse {
@@ -37,7 +48,16 @@ export interface AuthResponse {
     created_at: string;
     updated_at: string;
   };
-  token: string;
+  tokens: TokenPair;
+}
+
+export interface JWTPayload {
+  userId: number;
+  role: string;
+  permissions: string[];
+  type: "access" | "refresh";
+  iat?: number;
+  exp?: number;
 }
 
 // Custom error class for verification required
@@ -54,7 +74,10 @@ class VerificationRequiredError extends Error {
 class AuthService {
   private readonly JWT_SECRET =
     process.env.JWT_SECRET || "farm-connect-secret-key";
-  private readonly JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "7d";
+  private readonly ACCESS_TOKEN_EXPIRES_IN =
+    process.env.JWT_ACCESS_EXPIRES_IN || "15m";
+  private readonly REFRESH_TOKEN_EXPIRES_IN =
+    process.env.JWT_REFRESH_EXPIRES_IN || "30d";
   private readonly SALT_ROUNDS = 12;
 
   /**
@@ -75,10 +98,80 @@ class AuthService {
   }
 
   /**
-   * Generate JWT token
+   * Generate access token (short-lived)
    */
-  private generateToken(userId: number): string {
-    return jwt.sign({ userId }, this.JWT_SECRET, { expiresIn: "7d" });
+  private generateAccessToken(
+    userId: number,
+    role: string,
+    permissions: string[]
+  ): string {
+    const payload = {
+      userId,
+      role,
+      permissions,
+      type: "access",
+    };
+    return jwt.sign(payload, this.JWT_SECRET, {
+      expiresIn: this.ACCESS_TOKEN_EXPIRES_IN,
+    } as SignOptions);
+  }
+
+  /**
+   * Generate refresh token (long-lived)
+   */
+  private generateRefreshToken(userId: number, tokenId: string): string {
+    const payload = {
+      userId,
+      tokenId,
+      type: "refresh",
+    };
+    return jwt.sign(payload, this.JWT_SECRET, {
+      expiresIn: this.REFRESH_TOKEN_EXPIRES_IN,
+    } as SignOptions);
+  }
+
+  /**
+   * Generate CSRF token
+   */
+  private generateCSRFToken(): string {
+    return crypto.randomBytes(32).toString("hex");
+  }
+
+  /**
+   * Generate token pair with refresh token storage
+   */
+  private async generateTokenPair(
+    user: any,
+    deviceInfo?: string,
+    ipAddress?: string
+  ): Promise<TokenPair> {
+    const tokenId = crypto.randomUUID();
+    
+    // Get user permissions using the permission service
+    const permissions = await this.getUserPermissions(user.id);
+
+    const accessToken = this.generateAccessToken(
+      user.id,
+      user.role?.name || "farmer",
+      permissions
+    );
+    const refreshToken = this.generateRefreshToken(user.id, tokenId);
+    const csrfToken = this.generateCSRFToken();
+
+    // Store refresh token in database
+    const expiresAt = new Date();
+    expiresAt.setDate(expiresAt.getDate() + 30); // 30 days
+
+    await RefreshToken.create({
+      user_id: user.id,
+      token: tokenId,
+      device_info:
+        typeof deviceInfo === "object" ? deviceInfo : { userAgent: deviceInfo },
+      ip_address: ipAddress,
+      expires_at: expiresAt,
+    });
+
+    return { accessToken, refreshToken, csrfToken };
   }
 
   /**
@@ -106,23 +199,31 @@ class AuthService {
   /**
    * Get user permissions by role
    */
-  private async getUserPermissions(roleId: number): Promise<string[]> {
-    // This will be implemented when we add RolePermission associations
-    // For now, return basic farmer permissions
-    return [
-      "view_own_profile",
-      "edit_own_profile",
-      "view_best_practices",
-      "participate_discussions",
-      "take_quiz",
-      "view_resources",
-    ];
+  private async getUserPermissions(userId: number): Promise<string[]> {
+    try {
+      return await permissionService.getUserPermissions(userId);
+    } catch (error) {
+      console.error("Error fetching user permissions:", error);
+      // Return basic permissions as fallback
+      return [
+        "view_own_profile",
+        "edit_own_profile",
+        "view_best_practices",
+        "participate_discussions",
+        "take_quiz",
+        "view_resources",
+      ];
+    }
   }
 
   /**
    * Register a new farmer
    */
-  async registerFarmer(data: RegisterFarmerData): Promise<AuthResponse> {
+  async registerFarmer(
+    data: RegisterFarmerData,
+    deviceInfo?: string,
+    ipAddress?: string
+  ): Promise<AuthResponse> {
     const {
       firstname,
       lastname,
@@ -178,11 +279,19 @@ class AuthService {
         contactEmail: email,
       });
 
-      // Generate JWT token
-      const token = this.generateToken(user.id);
+      // Get role data for token generation
+      const roleData = await Role.findByPk(farmerRoleId);
+      const userWithRole = { ...user.toJSON(), role: roleData };
+
+      // Generate secure token pair
+      const tokens = await this.generateTokenPair(
+        userWithRole,
+        deviceInfo,
+        ipAddress
+      );
 
       // Get user permissions
-      const permissions = await this.getUserPermissions(farmerRoleId);
+      const permissions = await this.getUserPermissions(user.id);
 
       // Return auth response
       return {
@@ -205,7 +314,7 @@ class AuthService {
           created_at: user.createdAt.toISOString(),
           updated_at: user.updatedAt.toISOString(),
         },
-        token,
+        tokens,
       };
     } catch (error: any) {
       throw new Error(`Registration failed: ${error.message}`);
@@ -215,7 +324,12 @@ class AuthService {
   /**
    * Login user
    */
-  async login(email: string, password: string): Promise<AuthResponse> {
+  async login(
+    email: string,
+    password: string,
+    deviceInfo?: string,
+    ipAddress?: string
+  ): Promise<AuthResponse> {
     // Find user with role
     const user = await User.findOne({
       where: { email },
@@ -251,11 +365,11 @@ class AuthService {
       );
     }
 
-    // Generate JWT token
-    const token = this.generateToken(user.id);
+    // Generate secure token pair
+    const tokens = await this.generateTokenPair(user, deviceInfo, ipAddress);
 
     // Get user permissions
-    const permissions = await this.getUserPermissions(user.role_id);
+    const permissions = await this.getUserPermissions(user.id);
 
     return {
       user: {
@@ -277,16 +391,16 @@ class AuthService {
         created_at: user.createdAt.toISOString(),
         updated_at: user.updatedAt.toISOString(),
       },
-      token,
+      tokens,
     };
   }
 
   /**
    * Verify JWT token and return user
    */
-  async verifyToken(token: string): Promise<{ userId: number }> {
+  async verifyToken(token: string): Promise<JWTPayload> {
     try {
-      const decoded = jwt.verify(token, this.JWT_SECRET) as { userId: number };
+      const decoded = jwt.verify(token, this.JWT_SECRET) as JWTPayload;
       return decoded;
     } catch (error) {
       throw new Error("Invalid or expired token");
@@ -487,7 +601,9 @@ class AuthService {
   async firstTimeLoginVerification(
     email: string,
     currentPassword: string,
-    newPassword: string
+    newPassword: string,
+    deviceInfo?: string,
+    ipAddress?: string
   ): Promise<AuthResponse> {
     // Find user
     const user = await User.findOne({
@@ -533,11 +649,11 @@ class AuthService {
       is_verified: true,
     });
 
-    // Generate JWT token
-    const token = this.generateToken(user.id);
+    // Generate secure token pair
+    const tokens = await this.generateTokenPair(user, deviceInfo, ipAddress);
 
     // Get user permissions
-    const permissions = await this.getUserPermissions(user.role_id);
+    const permissions = await this.getUserPermissions(user.id);
 
     return {
       user: {
@@ -559,7 +675,7 @@ class AuthService {
         created_at: user.createdAt.toISOString(),
         updated_at: user.updatedAt.toISOString(),
       },
-      token,
+      tokens,
     };
   }
 
@@ -568,7 +684,9 @@ class AuthService {
    */
   async firstTimeLoginVerificationSimple(
     email: string,
-    newPassword: string
+    newPassword: string,
+    deviceInfo?: string,
+    ipAddress?: string
   ): Promise<AuthResponse> {
     // Find user
     const user = await User.findOne({
@@ -605,11 +723,11 @@ class AuthService {
       is_verified: true,
     });
 
-    // Generate JWT token
-    const token = this.generateToken(user.id);
+    // Generate secure token pair
+    const tokens = await this.generateTokenPair(user, deviceInfo, ipAddress);
 
     // Get user permissions
-    const permissions = await this.getUserPermissions(user.role_id);
+    const permissions = await this.getUserPermissions(user.id);
 
     return {
       user: {
@@ -631,7 +749,7 @@ class AuthService {
         created_at: user.createdAt.toISOString(),
         updated_at: user.updatedAt.toISOString(),
       },
-      token,
+      tokens,
     };
   }
 
@@ -747,7 +865,7 @@ class AuthService {
     await user.reload();
 
     // Get user permissions
-    const permissions = await this.getUserPermissions(user.role_id);
+    const permissions = await this.getUserPermissions(user.id);
 
     return {
       success: true,
@@ -772,6 +890,129 @@ class AuthService {
         updated_at: user.updatedAt.toISOString(),
       },
     };
+  }
+
+  /**
+   * Refresh access token using refresh token
+   */
+  async refreshTokens(
+    refreshToken: string,
+    deviceInfo?: string,
+    ipAddress?: string
+  ): Promise<TokenPair> {
+    try {
+      // Verify refresh token
+      const decoded = jwt.verify(refreshToken, this.JWT_SECRET) as {
+        userId: number;
+        tokenId: string;
+        type: string;
+      };
+
+      if (decoded.type !== "refresh") {
+        throw new Error("Invalid token type");
+      }
+
+      // Find stored refresh token
+      const storedToken = await RefreshToken.findOne({
+        where: {
+          user_id: decoded.userId,
+          token: decoded.tokenId,
+          expires_at: { [Op.gt]: new Date() },
+        },
+      });
+
+      if (!storedToken) {
+        throw new Error("Invalid or expired refresh token");
+      }
+
+      // Get user with permissions
+      const user = await User.findByPk(decoded.userId, {
+        include: [
+          {
+            model: Role,
+            as: "role",
+            attributes: ["name"],
+            include: [
+              {
+                model: Permission,
+                through: { attributes: [] },
+                attributes: ["name"],
+              },
+            ],
+          },
+        ],
+      });
+
+      if (!user) {
+        throw new Error("User not found");
+      }
+
+      // Delete old refresh token
+      await storedToken.destroy();
+
+      // Generate new token pair (refresh token rotation)
+      return await this.generateTokenPair(user, deviceInfo, ipAddress);
+    } catch (error) {
+      throw new Error("Token refresh failed");
+    }
+  }
+
+  /**
+   * Logout user and invalidate refresh token
+   */
+  async logout(refreshToken: string): Promise<void> {
+    try {
+      const decoded = jwt.verify(refreshToken, this.JWT_SECRET) as {
+        userId: number;
+        tokenId: string;
+        type: string;
+      };
+
+      if (decoded.type === "refresh") {
+        await RefreshToken.destroy({
+          where: {
+            user_id: decoded.userId,
+            token: decoded.tokenId,
+          },
+        });
+      }
+    } catch (error) {
+      // Silent fail for logout - even if token is invalid, consider logout successful
+    }
+  }
+
+  /**
+   * Verify access token (for cookie authentication)
+   */
+  async verifyAccessToken(
+    token: string
+  ): Promise<{ userId: number; role: string; permissions: string[] }> {
+    try {
+      const decoded = jwt.verify(token, this.JWT_SECRET) as any;
+
+      if (decoded.type !== "access") {
+        throw new Error("Invalid token type");
+      }
+
+      return {
+        userId: decoded.userId,
+        role: decoded.role,
+        permissions: decoded.permissions,
+      };
+    } catch (error) {
+      throw new Error("Invalid or expired access token");
+    }
+  }
+
+  /**
+   * Clean up expired refresh tokens
+   */
+  async cleanupExpiredTokens(): Promise<void> {
+    await RefreshToken.destroy({
+      where: {
+        expires_at: { [Op.lt]: new Date() },
+      },
+    });
   }
 }
 

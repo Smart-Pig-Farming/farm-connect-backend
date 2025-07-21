@@ -11,7 +11,8 @@ import {
   validatePasswordChange,
   validateProfileUpdate,
 } from "../middleware/validation";
-import { authenticateToken } from "../middleware/auth";
+import { authenticateWithCookies } from "../middleware/cookieAuth";
+import { AuthenticatedUser } from "../middleware/auth"; // Import to load type declarations
 import permissionService from "../services/permissionService";
 
 const router = Router();
@@ -46,14 +47,22 @@ router.post("/logout", authController.logout);
  * @desc    Get current user profile
  * @access  Private
  */
-router.get("/me", authenticateToken, authController.getCurrentUser);
+router.get("/me", authenticateWithCookies, authController.getProfile);
+
+/**
+ * @route   POST /auth/refresh
+ * @desc    Refresh access token
+ * @access  Private
+ */
+router.post("/refresh", authController.refreshToken);
 
 /**
  * @route   POST /auth/verify-token
  * @desc    Verify if token is valid
  * @access  Public
  */
-router.post("/verify-token", authController.verifyToken);
+// Temporarily disabled - needs implementation
+// router.post("/verify-token", authController.verifyToken);
 
 /**
  * @route   POST /auth/forgot-password
@@ -108,17 +117,18 @@ router.post(
  * @desc    Account verification with new password (simple)
  * @access  Public
  */
-router.post("/verify-account", authController.firstTimeLoginVerificationSimple);
+router.post("/verify-account", authController.verifyAccount);
 
 /**
  * @route   POST /auth/first-time-verification
  * @desc    First-time login verification (password reset)
  * @access  Public
  */
-router.post(
-  "/first-time-verification",
-  authController.firstTimeLoginVerification
-);
+// Temporarily disabled - needs implementation
+// router.post(
+//   "/first-time-verification",
+//   authController.firstTimeLoginVerification
+// );
 
 /**
  * @route   GET /auth/permissions
@@ -127,7 +137,7 @@ router.post(
  */
 router.get(
   "/permissions",
-  authenticateToken,
+  authenticateWithCookies,
   async (req, res): Promise<void> => {
     try {
       if (!req.user) {
@@ -143,9 +153,9 @@ router.get(
         req.user.id
       );
 
+      // Frontend expects { permissions: string[] }
       res.status(200).json({
-        success: true,
-        data: permissionInfo,
+        permissions: permissionInfo.permissions,
       });
     } catch (error: any) {
       res.status(500).json({
@@ -165,7 +175,7 @@ router.get(
  */
 router.post(
   "/change-password",
-  authenticateToken,
+  authenticateWithCookies,
   validatePasswordChange,
   authController.changePassword
 );
@@ -178,7 +188,7 @@ router.post(
  */
 router.put(
   "/profile",
-  authenticateToken,
+  authenticateWithCookies,
   validateProfileUpdate,
   authController.updateProfile
 );

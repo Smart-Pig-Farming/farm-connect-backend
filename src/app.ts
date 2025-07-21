@@ -2,6 +2,7 @@ import express, { Application, Request, Response, NextFunction } from "express";
 import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
+import cookieParser from "cookie-parser";
 import dotenv from "dotenv";
 import { testConnection } from "./config/database";
 import { runBasicSeeds } from "./seeders/basicSeeds";
@@ -61,10 +62,13 @@ class App {
     // Security middleware
     this.app.use(helmet());
 
+    // Cookie parsing middleware (must be before other parsing middleware)
+    this.app.use(cookieParser());
+
     // CORS middleware
     this.app.use(
       cors({
-        origin: process.env.FRONTEND_URL || "http://localhost:3000",
+        origin: process.env.FRONTEND_URL || "http://localhost:5173",
         credentials: true,
       })
     );
