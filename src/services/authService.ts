@@ -146,7 +146,7 @@ class AuthService {
     ipAddress?: string
   ): Promise<TokenPair> {
     const tokenId = crypto.randomUUID();
-    
+
     // Get user permissions using the permission service
     const permissions = await this.getUserPermissions(user.id);
 
