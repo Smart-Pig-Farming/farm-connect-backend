@@ -39,6 +39,10 @@ export const authenticateWithCookies = async (
         }
       } catch (error) {
         // Token invalid, try refresh token
+        console.debug(
+          "Access token verification failed, attempting refresh:",
+          error instanceof Error ? error.message : String(error)
+        );
       }
     }
 
@@ -83,6 +87,10 @@ export const authenticateWithCookies = async (
         }
       } catch (error) {
         // Refresh token failed, fall through to authentication failed
+        console.debug(
+          "Refresh token verification failed:",
+          error instanceof Error ? error.message : String(error)
+        );
       }
     }
 
@@ -126,6 +134,10 @@ export const optionalAuth = async (
         }
       } catch (error) {
         // Token invalid, but don't fail the request for optional auth
+        console.debug(
+          "Optional auth token verification failed:",
+          error instanceof Error ? error.message : String(error)
+        );
       }
     }
 
