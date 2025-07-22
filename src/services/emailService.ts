@@ -1,4 +1,5 @@
 import nodemailer from "nodemailer";
+import crypto from "crypto";
 
 class EmailService {
   private transporter: nodemailer.Transporter;
@@ -45,9 +46,9 @@ class EmailService {
     }
   }
 
-  // Generate 4-digit OTP
+  // Generate 4-digit OTP using cryptographically secure random generation
   generateOTP(): string {
-    return Math.floor(1000 + Math.random() * 9000).toString();
+    return crypto.randomInt(1000, 9999).toString();
   }
 
   // Send OTP email for password reset

@@ -21,8 +21,10 @@ class PasswordResetService {
       timestamp: Date.now(),
     };
 
-    const secret =
-      process.env.JWT_SECRET || "fallback-secret-change-in-production";
+    if (!process.env.JWT_SECRET) {
+      throw new Error("JWT_SECRET environment variable is required");
+    }
+    const secret = process.env.JWT_SECRET;
 
     // Generate JWT with 10 minute expiration
     return jwt.sign(payload, secret, {
@@ -39,8 +41,10 @@ class PasswordResetService {
     token: string
   ): { resetTokenId: number; userId: number } | null {
     try {
-      const secret =
-        process.env.JWT_SECRET || "fallback-secret-change-in-production";
+      if (!process.env.JWT_SECRET) {
+        throw new Error("JWT_SECRET environment variable is required");
+      }
+      const secret = process.env.JWT_SECRET;
 
       const decoded = jwt.verify(token, secret, {
         issuer: "farm-connect-auth",

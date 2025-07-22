@@ -82,6 +82,10 @@ class PermissionService {
 
       // Check for MANAGE permissions (MANAGE implies all CRUD operations)
       const [action, resource] = permission.split(":");
+      if (!action || !resource) {
+        return { hasPermission: false, reason: "Invalid permission format" };
+      }
+
       const managePermission = createPermissionString(
         ACTIONS.MANAGE,
         resource as any

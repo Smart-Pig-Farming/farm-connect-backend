@@ -451,14 +451,14 @@ class AuthService {
   generateTemporaryPassword(): string {
     const length = 12;
     const charset =
-      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*";
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()_+-=[]{}|;:,.<>/\\";
     let password = "";
 
     // Ensure at least one character from each type
     const uppercase = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
     const lowercase = "abcdefghijklmnopqrstuvwxyz";
     const numbers = "0123456789";
-    const symbols = "!@#$%^&*";
+    const symbols = "!@#$%^&*()_+-=[]{}|;:,.<>/\\";
 
     // Use crypto.randomBytes for cryptographically secure random generation
     password += uppercase[crypto.randomBytes(1)[0] % uppercase.length];
