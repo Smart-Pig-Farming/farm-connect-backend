@@ -3,6 +3,14 @@ import authService from "../services/authService";
 import permissionService from "../services/permissionService";
 import User from "../models/User";
 import Role from "../models/Role";
+import Permission from "../models/Permission";
+
+// TypeScript interface for User with role associations
+interface UserWithRole extends User {
+  role?: Role & {
+    permissions?: Permission[];
+  };
+}
 
 // Extend Request interface to include user
 declare global {
@@ -51,7 +59,7 @@ export const authenticateToken = async (
     const decoded = await authService.verifyToken(token);
 
     // Get user details
-    const user = await User.findByPk(decoded.userId, {
+    const user = (await User.findByPk(decoded.userId, {
       include: [
         {
           model: Role,
@@ -59,7 +67,7 @@ export const authenticateToken = async (
           attributes: ["name"],
         },
       ],
-    });
+    })) as UserWithRole | null;
 
     if (!user) {
       res.status(401).json({
@@ -84,13 +92,13 @@ export const authenticateToken = async (
     req.user = {
       id: user.id,
       email: user.email,
-      role: (user as any).role?.name || "farmer",
+      role: user.role?.name || "farmer",
       permissions: userPermissions,
     };
 
     // Also attach permissions separately for easier access
     req.userPermissions = userPermissions;
-    req.userRoles = [(user as any).role?.name || "farmer"];
+    req.userRoles = [user.role?.name || "farmer"];
 
     next();
   } catch (error: any) {

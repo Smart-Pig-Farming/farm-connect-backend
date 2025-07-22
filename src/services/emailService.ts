@@ -5,9 +5,14 @@ class EmailService {
 
   constructor() {
     // Validate required environment variables
-    if (!process.env.EMAIL_USER || !process.env.EMAIL_PASSWORD) {
+    if (!process.env.EMAIL_USER) {
       throw new Error(
-        "Environment variables EMAIL_USER and EMAIL_PASSWORD must be set."
+        "Environment variable EMAIL_USER is missing. Please set it in your environment configuration."
+      );
+    }
+    if (!process.env.EMAIL_PASSWORD) {
+      throw new Error(
+        "Environment variable EMAIL_PASSWORD is missing. Please set it in your environment configuration."
       );
     }
 

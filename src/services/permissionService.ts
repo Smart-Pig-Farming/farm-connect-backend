@@ -10,6 +10,13 @@ import {
   createPermissionString,
 } from "../constants/permissions";
 
+// TypeScript interfaces for proper type safety
+interface UserWithRole extends User {
+  role?: Role & {
+    permissions?: Permission[];
+  };
+}
+
 export interface UserPermissionInfo {
   userId: number;
   permissions: string[];
@@ -27,7 +34,7 @@ class PermissionService {
    */
   async getUserPermissions(userId: number): Promise<string[]> {
     try {
-      const user = await User.findByPk(userId, {
+      const user = (await User.findByPk(userId, {
         include: [
           {
             model: Role,
@@ -41,15 +48,15 @@ class PermissionService {
             ],
           },
         ],
-      });
+      })) as UserWithRole | null;
 
-      if (!user || !(user as any).role) {
+      if (!user || !user.role) {
         return [];
       }
 
       return (
-        (user as any).role.permissions?.map(
-          (permission: any) => permission.name
+        user.role.permissions?.map(
+          (permission: Permission) => permission.name
         ) || []
       );
     } catch (error) {
@@ -147,7 +154,7 @@ class PermissionService {
    */
   async getUserPermissionInfo(userId: number): Promise<UserPermissionInfo> {
     try {
-      const user = await User.findByPk(userId, {
+      const user = (await User.findByPk(userId, {
         include: [
           {
             model: Role,
@@ -161,19 +168,19 @@ class PermissionService {
             ],
           },
         ],
-      });
+      })) as UserWithRole | null;
 
-      if (!user || !(user as any).role) {
+      if (!user || !user.role) {
         return { userId, permissions: [], roles: [] };
       }
 
       return {
         userId,
         permissions:
-          (user as any).role.permissions?.map(
-            (permission: any) => permission.name
+          user.role.permissions?.map(
+            (permission: Permission) => permission.name
           ) || [],
-        roles: [(user as any).role.name],
+        roles: [user.role.name],
       };
     } catch (error) {
       console.error("Error getting user permission info:", error);

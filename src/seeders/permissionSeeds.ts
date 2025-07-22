@@ -21,7 +21,9 @@ function validateAdminConfig(): { email: string; password: string } {
 
   if (!adminEmail || !adminPassword) {
     throw new Error(
-      "Environment variables ADMIN_EMAIL and ADMIN_PASSWORD must be set for admin user creation."
+      "Environment variables ADMIN_EMAIL and ADMIN_PASSWORD must be set for admin user creation. " +
+        "Ensure ADMIN_EMAIL is a valid email address (e.g., admin@example.com) and ADMIN_PASSWORD is a secure password. " +
+        "You can set these variables in a .env file or as system-level environment variables."
     );
   }
 

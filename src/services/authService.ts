@@ -11,6 +11,13 @@ import RefreshToken from "../models/RefreshToken";
 import { emailService } from "./emailService";
 import permissionService from "./permissionService";
 
+// TypeScript interface for User with role associations
+interface UserWithRole extends User {
+  role?: Role & {
+    permissions?: Permission[];
+  };
+}
+
 export interface RegisterFarmerData {
   firstname: string;
   lastname: string;
@@ -362,7 +369,7 @@ class AuthService {
     ipAddress?: string
   ): Promise<AuthResponse> {
     // Find user with role
-    const user = await User.findOne({
+    const user = (await User.findOne({
       where: { email },
       include: [
         {
@@ -371,7 +378,7 @@ class AuthService {
           attributes: ["name"],
         },
       ],
-    });
+    })) as UserWithRole | null;
 
     if (!user) {
       throw new Error("Invalid email or password");
@@ -409,7 +416,7 @@ class AuthService {
         lastname: user.lastname,
         email: user.email,
         username: user.username,
-        role: (user as any).role?.name || "farmer",
+        role: user.role?.name || "farmer",
         permissions,
         organization: user.organization,
         province: user.province,
@@ -439,7 +446,7 @@ class AuthService {
   }
 
   /**
-   * Generate a temporary password
+   * Generate a temporary password using cryptographically secure random generation
    */
   generateTemporaryPassword(): string {
     const length = 12;
@@ -453,21 +460,28 @@ class AuthService {
     const numbers = "0123456789";
     const symbols = "!@#$%^&*";
 
-    password += uppercase[Math.floor(Math.random() * uppercase.length)];
-    password += lowercase[Math.floor(Math.random() * lowercase.length)];
-    password += numbers[Math.floor(Math.random() * numbers.length)];
-    password += symbols[Math.floor(Math.random() * symbols.length)];
+    // Use crypto.randomBytes for cryptographically secure random generation
+    password += uppercase[crypto.randomBytes(1)[0] % uppercase.length];
+    password += lowercase[crypto.randomBytes(1)[0] % lowercase.length];
+    password += numbers[crypto.randomBytes(1)[0] % numbers.length];
+    password += symbols[crypto.randomBytes(1)[0] % symbols.length];
 
     // Fill remaining characters
     for (let i = password.length; i < length; i++) {
-      password += charset[Math.floor(Math.random() * charset.length)];
+      password += charset[crypto.randomBytes(1)[0] % charset.length];
     }
 
-    // Shuffle the password
-    return password
-      .split("")
-      .sort(() => Math.random() - 0.5)
-      .join("");
+    // Shuffle the password using cryptographically secure random
+    const passwordArray = password.split("");
+    for (let i = passwordArray.length - 1; i > 0; i--) {
+      const j = crypto.randomBytes(1)[0] % (i + 1);
+      [passwordArray[i], passwordArray[j]] = [
+        passwordArray[j],
+        passwordArray[i],
+      ];
+    }
+
+    return passwordArray.join("");
   }
 
   /**
@@ -576,7 +590,7 @@ class AuthService {
     userId: number
   ): Promise<{ emailSent: boolean; temporaryPassword?: string }> {
     // Find user
-    const user = await User.findOne({
+    const user = (await User.findOne({
       where: { id: userId },
       include: [
         {
@@ -585,7 +599,7 @@ class AuthService {
           attributes: ["id", "name"],
         },
       ],
-    });
+    })) as UserWithRole | null;
 
     if (!user) {
       throw new Error("User not found");
@@ -605,7 +619,7 @@ class AuthService {
     let emailSent = false;
     try {
       const fullName = `${user.firstname} ${user.lastname}`;
-      const roleName = (user as any).role?.name || "User";
+      const roleName = user.role?.name || "User";
 
       await emailService.sendUserCredentials(
         user.email,
@@ -637,7 +651,7 @@ class AuthService {
     ipAddress?: string
   ): Promise<AuthResponse> {
     // Find user
-    const user = await User.findOne({
+    const user = (await User.findOne({
       where: { email },
       include: [
         {
@@ -646,7 +660,7 @@ class AuthService {
           attributes: ["name"],
         },
       ],
-    });
+    })) as UserWithRole | null;
 
     if (!user) {
       throw new Error("User not found");
@@ -693,7 +707,7 @@ class AuthService {
         lastname: user.lastname,
         email: user.email,
         username: user.username,
-        role: (user as any).role?.name || "user",
+        role: user.role?.name || "user",
         permissions,
         organization: user.organization,
         province: user.province,
@@ -720,7 +734,7 @@ class AuthService {
     ipAddress?: string
   ): Promise<AuthResponse> {
     // Find user
-    const user = await User.findOne({
+    const user = (await User.findOne({
       where: { email },
       include: [
         {
@@ -729,7 +743,7 @@ class AuthService {
           attributes: ["name"],
         },
       ],
-    });
+    })) as UserWithRole | null;
 
     if (!user) {
       throw new Error("User not found");
@@ -767,7 +781,7 @@ class AuthService {
         lastname: user.lastname,
         email: user.email,
         username: user.username,
-        role: (user as any).role?.name || "user",
+        role: user.role?.name || "user",
         permissions,
         organization: user.organization,
         province: user.province,
@@ -865,7 +879,7 @@ class AuthService {
     };
   }> {
     // Find user
-    const user = await User.findByPk(userId, {
+    const user = (await User.findByPk(userId, {
       include: [
         {
           model: Role,
@@ -873,7 +887,7 @@ class AuthService {
           attributes: ["name"],
         },
       ],
-    });
+    })) as UserWithRole | null;
 
     if (!user) {
       throw new Error("User not found");
@@ -907,7 +921,7 @@ class AuthService {
         lastname: user.lastname,
         email: user.email,
         username: user.username,
-        role: (user as any).role?.name || "user",
+        role: user.role?.name || "user",
         permissions,
         organization: user.organization,
         province: user.province,

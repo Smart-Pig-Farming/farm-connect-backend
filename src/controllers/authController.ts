@@ -4,6 +4,14 @@ import { getCookieConfig, clearCookieConfig } from "../config/cookieConfig";
 import permissionService from "../services/permissionService";
 import User from "../models/User";
 import Role from "../models/Role";
+import Permission from "../models/Permission";
+
+// TypeScript interface for User with role associations
+interface UserWithRole extends User {
+  role?: Role & {
+    permissions?: Permission[];
+  };
+}
 
 interface ExtendedRequest extends Request {
   user?: {
@@ -264,10 +272,10 @@ class AuthController {
         return;
       }
 
-      const user = await User.findByPk(req.user.id, {
+      const user = (await User.findByPk(req.user.id, {
         include: [{ model: Role, as: "role", attributes: ["name"] }],
         attributes: { exclude: ["password"] },
-      });
+      })) as UserWithRole | null;
 
       if (!user) {
         res.status(404).json({
@@ -285,7 +293,7 @@ class AuthController {
         lastname: user.lastname,
         email: user.email,
         username: user.username,
-        role: (user as any).role?.name || "farmer", // Extract role name from association
+        role: user.role?.name || "farmer", // Extract role name from association
         organization: user.organization,
         province: user.province,
         district: user.district,
