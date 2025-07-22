@@ -2,6 +2,7 @@ import bcrypt from "bcryptjs";
 import jwt, { SignOptions } from "jsonwebtoken";
 import crypto from "crypto";
 import { Op } from "sequelize";
+import sequelize from "../config/database";
 import User from "../models/User";
 import Role from "../models/Role";
 import Permission from "../models/Permission";
@@ -88,6 +89,30 @@ class AuthService {
   }
 
   /**
+   * Generate a unique device ID based on device info and user agent
+   */
+  private generateDeviceId(
+    deviceInfo: any,
+    userAgent?: string,
+    ipAddress?: string
+  ): string {
+    const deviceString = JSON.stringify({
+      userAgent: userAgent || deviceInfo?.userAgent || "",
+      platform: deviceInfo?.platform || "",
+      language: deviceInfo?.language || "",
+      screen: deviceInfo?.screen || "",
+      timezone: deviceInfo?.timezone || "",
+      ipAddress: ipAddress || "",
+    });
+
+    return crypto
+      .createHash("sha256")
+      .update(deviceString)
+      .digest("hex")
+      .substring(0, 32);
+  }
+
+  /**
    * Compare password with hash
    */
   private async comparePassword(
@@ -162,9 +187,13 @@ class AuthService {
     const expiresAt = new Date();
     expiresAt.setDate(expiresAt.getDate() + 30); // 30 days
 
+    // Generate device ID for tracking
+    const deviceId = this.generateDeviceId(deviceInfo, undefined, ipAddress);
+
     await RefreshToken.create({
       user_id: user.id,
       token: tokenId,
+      device_id: deviceId,
       device_info:
         typeof deviceInfo === "object" ? deviceInfo : { userAgent: deviceInfo },
       ip_address: ipAddress,
@@ -1013,6 +1042,78 @@ class AuthService {
     await RefreshToken.destroy({
       where: {
         expires_at: { [Op.lt]: new Date() },
+      },
+    });
+  }
+
+  /**
+   * Get all refresh tokens for a specific device
+   */
+  async getTokensByDevice(
+    userId: number,
+    deviceId: string
+  ): Promise<RefreshToken[]> {
+    return RefreshToken.findAll({
+      where: {
+        user_id: userId,
+        device_id: deviceId,
+        expires_at: { [Op.gt]: new Date() },
+      },
+      order: [["created_at", "DESC"]],
+    });
+  }
+
+  /**
+   * Revoke all tokens for a specific device
+   */
+  async revokeDeviceTokens(userId: number, deviceId: string): Promise<void> {
+    await RefreshToken.destroy({
+      where: {
+        user_id: userId,
+        device_id: deviceId,
+      },
+    });
+  }
+
+  /**
+   * Get all devices with active tokens for a user
+   */
+  async getUserDevices(
+    userId: number
+  ): Promise<{ device_id: string; last_used: Date; token_count: number }[]> {
+    const devices = (await RefreshToken.findAll({
+      where: {
+        user_id: userId,
+        expires_at: { [Op.gt]: new Date() },
+      },
+      attributes: [
+        "device_id",
+        [sequelize.fn("MAX", sequelize.col("created_at")), "last_used"],
+        [sequelize.fn("COUNT", sequelize.col("id")), "token_count"],
+      ],
+      group: ["device_id"],
+      order: [[sequelize.fn("MAX", sequelize.col("created_at")), "DESC"]],
+      raw: true,
+    })) as any[];
+
+    return devices.map((device) => ({
+      device_id: device.device_id,
+      last_used: new Date(device.last_used),
+      token_count: parseInt(device.token_count, 10),
+    }));
+  }
+
+  /**
+   * Revoke all tokens for a user except the current device
+   */
+  async revokeOtherDeviceTokens(
+    userId: number,
+    currentDeviceId: string
+  ): Promise<void> {
+    await RefreshToken.destroy({
+      where: {
+        user_id: userId,
+        device_id: { [Op.ne]: currentDeviceId },
       },
     });
   }
