@@ -13,6 +13,28 @@ import bcrypt from "bcryptjs";
 import { Op } from "sequelize";
 
 /**
+ * Validate admin configuration from environment variables
+ */
+function validateAdminConfig(): { email: string; password: string } {
+  const adminEmail = process.env.ADMIN_EMAIL;
+  const adminPassword = process.env.ADMIN_PASSWORD;
+
+  if (!adminEmail || !adminPassword) {
+    throw new Error(
+      "Environment variables ADMIN_EMAIL and ADMIN_PASSWORD must be set for admin user creation."
+    );
+  }
+
+  // Basic email validation
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(adminEmail)) {
+    throw new Error("ADMIN_EMAIL must be a valid email address.");
+  }
+
+  return { email: adminEmail, password: adminPassword };
+}
+
+/**
  * Seed Actions into the database
  */
 export async function seedActions(): Promise<void> {
@@ -328,12 +350,15 @@ export async function seedRolePermissions(): Promise<void> {
  */
 export async function seedAdminUser(): Promise<void> {
   try {
-    // Check if any admin user exists (with either email or username)
+    // Validate admin configuration first
+    const adminConfig = validateAdminConfig();
+
+    // Check if admin user exists with the configured email
     const existingAdmin = await User.findOne({
       where: {
         [Op.or]: [
-          { email: "piggydata25@gmail.com" },
-          { username: "piggydata25" },
+          { email: adminConfig.email },
+          { username: adminConfig.email.split("@")[0] },
           { username: "admin" }, // Also check for old admin username
         ],
       },
@@ -352,13 +377,13 @@ export async function seedAdminUser(): Promise<void> {
       throw new Error("Admin role not found. Please run role seeding first.");
     }
 
-    const hashedPassword = await bcrypt.hash("Admin123!", 10);
+    const hashedPassword = await bcrypt.hash(adminConfig.password, 10);
 
     const adminUser = await User.create({
       firstname: "System",
       lastname: "Administrator",
-      email: "piggydata25@gmail.com",
-      username: "piggydata25",
+      email: adminConfig.email,
+      username: adminConfig.email.split("@")[0],
       password: hashedPassword,
       role_id: adminRole.id,
       is_verified: true,
@@ -368,7 +393,9 @@ export async function seedAdminUser(): Promise<void> {
     });
 
     console.log("Admin user seeded successfully");
-    console.log("Admin credentials: piggydata25@gmail.com / Admin123!");
+    console.log(
+      `Admin credentials configured with email: ${adminConfig.email}`
+    );
   } catch (error) {
     console.error("Error seeding admin user:", error);
     throw error;

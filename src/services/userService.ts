@@ -1,5 +1,5 @@
 import { Op, WhereOptions, FindOptions } from "sequelize";
-import User from "../models/User";
+import User, { UserAttributes } from "../models/User";
 import Role from "../models/Role";
 import Level from "../models/Level";
 
@@ -74,58 +74,69 @@ class UserService {
       const offset = pagination.offset || (page - 1) * limit;
 
       // Build where conditions
-      const where: WhereOptions = {};
+      const whereConditions: WhereOptions[] = [];
 
       // Search functionality
       if (filters.search) {
         const searchTerm = filters.search.toLowerCase();
-        (where as any)[Op.or] = [
-          {
-            firstname: {
-              [Op.iLike]: `%${searchTerm}%`,
+        whereConditions.push({
+          [Op.or]: [
+            {
+              firstname: {
+                [Op.iLike]: `%${searchTerm}%`,
+              },
             },
-          },
-          {
-            lastname: {
-              [Op.iLike]: `%${searchTerm}%`,
+            {
+              lastname: {
+                [Op.iLike]: `%${searchTerm}%`,
+              },
             },
-          },
-          {
-            email: {
-              [Op.iLike]: `%${searchTerm}%`,
+            {
+              email: {
+                [Op.iLike]: `%${searchTerm}%`,
+              },
             },
-          },
-          {
-            username: {
-              [Op.iLike]: `%${searchTerm}%`,
+            {
+              username: {
+                [Op.iLike]: `%${searchTerm}%`,
+              },
             },
-          },
-        ];
+          ],
+        });
       }
 
       // Status filtering
       if (filters.status && filters.status !== "all") {
         switch (filters.status) {
           case "active":
-            where.is_verified = true;
-            where.is_locked = false;
+            whereConditions.push({
+              is_verified: true,
+              is_locked: false,
+            });
             break;
           case "locked":
-            where.is_locked = true;
+            whereConditions.push({
+              is_locked: true,
+            });
             break;
           case "unverified":
-            where.is_verified = false;
+            whereConditions.push({
+              is_verified: false,
+            });
             break;
         }
       }
 
       // Role filtering
       if (filters.roleId) {
-        where.role_id = filters.roleId;
-      } else if (filters.role && filters.role !== "all") {
-        // Add filtering by role name using include where clause
-        // This will be handled in the include section below
+        whereConditions.push({
+          role_id: filters.roleId,
+        });
       }
+
+      // Combine all where conditions with AND
+      const where: WhereOptions =
+        whereConditions.length > 0 ? { [Op.and]: whereConditions } : {};
 
       // Query options
       const queryOptions: FindOptions = {
@@ -306,25 +317,28 @@ class UserService {
         User.count({ where: { is_verified: false } }),
       ]);
 
-      // Get user count by role
-      const usersByRole = await User.findAll({
-        attributes: ["role_id"],
+      // Get user count by role - using a more type-safe approach
+      const roles = await Role.findAll({
+        attributes: ["id", "name"],
         include: [
           {
-            model: Role,
-            as: "role",
-            attributes: ["name"],
+            model: User,
+            as: "users",
+            attributes: [],
+            required: false,
           },
         ],
-        group: ["role_id", "role.id", "role.name"],
-        raw: true,
       });
 
       const byRole: { [key: string]: number } = {};
-      usersByRole.forEach((user: any) => {
-        const roleName = user["role.name"];
-        byRole[roleName] = (byRole[roleName] || 0) + 1;
-      });
+
+      // Count users for each role
+      for (const role of roles) {
+        const userCount = await User.count({
+          where: { role_id: role.id },
+        });
+        byRole[role.name] = userCount;
+      }
 
       return {
         total,

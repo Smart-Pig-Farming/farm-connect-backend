@@ -1,10 +1,65 @@
 import bcrypt from "bcryptjs";
+import crypto from "crypto";
+import jwt from "jsonwebtoken";
 import { Op } from "sequelize";
 import User from "../models/User";
 import { PasswordResetToken } from "../models/PasswordResetToken";
 import { emailService } from "./emailService";
 
 class PasswordResetService {
+  /**
+   * Generate a cryptographically secure JWT token for password reset
+   */
+  private generateSecureResetToken(
+    resetTokenId: number,
+    userId: number
+  ): string {
+    const payload = {
+      resetTokenId,
+      userId,
+      purpose: "password-reset",
+      timestamp: Date.now(),
+    };
+
+    const secret =
+      process.env.JWT_SECRET || "fallback-secret-change-in-production";
+
+    // Generate JWT with 10 minute expiration
+    return jwt.sign(payload, secret, {
+      expiresIn: "10m",
+      issuer: "farm-connect-auth",
+      audience: "password-reset",
+    });
+  }
+
+  /**
+   * Verify and decode the secure reset token
+   */
+  private verifyResetToken(
+    token: string
+  ): { resetTokenId: number; userId: number } | null {
+    try {
+      const secret =
+        process.env.JWT_SECRET || "fallback-secret-change-in-production";
+
+      const decoded = jwt.verify(token, secret, {
+        issuer: "farm-connect-auth",
+        audience: "password-reset",
+      }) as any;
+
+      if (decoded.purpose !== "password-reset") {
+        return null;
+      }
+
+      return {
+        resetTokenId: decoded.resetTokenId,
+        userId: decoded.userId,
+      };
+    } catch (error) {
+      return null;
+    }
+  }
+
   // Request password reset - sends OTP to email
   async requestPasswordReset(
     email: string
@@ -106,8 +161,11 @@ class PasswordResetService {
       // Mark as used
       await resetToken.markAsUsed();
 
-      // Return a temporary token for password reset (you could use JWT here)
-      const tempToken = `${resetToken.id}_${Date.now()}`;
+      // Return a secure JWT token for password reset
+      const tempToken = this.generateSecureResetToken(
+        resetToken.id,
+        resetToken.userId
+      );
 
       return {
         success: true,
@@ -123,15 +181,27 @@ class PasswordResetService {
     }
   }
 
-  // Reset password using temp token
+  // Reset password using secure JWT token
   async resetPassword(
     tempToken: string,
     newPassword: string
   ): Promise<{ success: boolean; message: string }> {
     try {
-      // Parse temp token
-      const [tokenId] = tempToken.split("_");
-      const resetToken = await PasswordResetToken.findByPk(parseInt(tokenId));
+      // Verify and decode the JWT token
+      const tokenData = this.verifyResetToken(tempToken);
+
+      if (!tokenData) {
+        return {
+          success: false,
+          message:
+            "Invalid or expired reset token. Please start the password reset process again.",
+        };
+      }
+
+      // Fetch the reset token from database to ensure it exists and is used
+      const resetToken = await PasswordResetToken.findByPk(
+        tokenData.resetTokenId
+      );
 
       if (!resetToken || !resetToken.isUsed) {
         return {
@@ -141,7 +211,16 @@ class PasswordResetService {
         };
       }
 
-      // Check if token is not too old (allow 10 minutes after verification)
+      // Verify the user ID matches
+      if (resetToken.userId !== tokenData.userId) {
+        return {
+          success: false,
+          message:
+            "Invalid reset token. Please start the password reset process again.",
+        };
+      }
+
+      // Additional security: Check if token is not too old (allow 10 minutes after verification)
       const tokenAge = Date.now() - resetToken.updatedAt.getTime();
       if (tokenAge > 10 * 60 * 1000) {
         // 10 minutes

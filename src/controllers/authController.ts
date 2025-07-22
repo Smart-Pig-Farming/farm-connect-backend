@@ -68,10 +68,16 @@ class AuthController {
       let statusCode = 400;
       let errorCode = "REGISTRATION_FAILED";
 
-      if (error.name === "DuplicateEmailError" || error.message.includes("User with this email already exists")) {
+      if (
+        error.name === "DuplicateEmailError" ||
+        error.message.includes("User with this email already exists")
+      ) {
         statusCode = 409; // Conflict
         errorCode = "EMAIL_ALREADY_EXISTS";
-      } else if (error.message.includes("validation") || error.message.includes("invalid")) {
+      } else if (
+        error.message.includes("validation") ||
+        error.message.includes("invalid")
+      ) {
         statusCode = 400;
         errorCode = "INVALID_DATA";
       }
@@ -139,7 +145,10 @@ class AuthController {
       } else if (error.message.includes("locked")) {
         statusCode = 423;
         errorCode = "ACCOUNT_LOCKED";
-      } else if (error.message.includes("verification") || error.message.includes("verified")) {
+      } else if (
+        error.message.includes("verification") ||
+        error.message.includes("verified")
+      ) {
         // Fallback for verification-related errors
         statusCode = 403;
         errorCode = "ACCOUNT_NOT_VERIFIED";

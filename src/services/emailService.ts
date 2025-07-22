@@ -4,13 +4,40 @@ class EmailService {
   private transporter: nodemailer.Transporter;
 
   constructor() {
+    // Validate required environment variables
+    if (!process.env.EMAIL_USER || !process.env.EMAIL_PASSWORD) {
+      throw new Error(
+        "Environment variables EMAIL_USER and EMAIL_PASSWORD must be set."
+      );
+    }
+
     this.transporter = nodemailer.createTransport({
       service: "gmail",
       auth: {
-        user: process.env.EMAIL_USER || "piggydata25@gmail.com",
-        pass: process.env.EMAIL_PASSWORD, // App password for Gmail
+        user: process.env.EMAIL_USER!,
+        pass: process.env.EMAIL_PASSWORD!, // App password for Gmail
       },
     });
+  }
+
+  /**
+   * Check if email service is properly configured
+   */
+  isConfigured(): boolean {
+    return !!(process.env.EMAIL_USER && process.env.EMAIL_PASSWORD);
+  }
+
+  /**
+   * Verify email service connection
+   */
+  async verifyConnection(): Promise<boolean> {
+    try {
+      await this.transporter.verify();
+      return true;
+    } catch (error) {
+      console.error("Email service connection failed:", error);
+      return false;
+    }
   }
 
   // Generate 4-digit OTP
@@ -27,7 +54,7 @@ class EmailService {
     const mailOptions = {
       from: {
         name: "FarmConnect",
-        address: process.env.EMAIL_USER || "piggydata25@gmail.com",
+        address: process.env.EMAIL_USER!,
       },
       to: email,
       subject: "Reset Your FarmConnect Password",
@@ -176,7 +203,7 @@ class EmailService {
     const mailOptions = {
       from: {
         name: "FarmConnect",
-        address: process.env.EMAIL_USER || "piggydata25@gmail.com",
+        address: process.env.EMAIL_USER!,
       },
       to: email,
       subject: "Welcome to FarmConnect - Your Account Credentials",
