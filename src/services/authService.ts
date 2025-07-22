@@ -239,7 +239,9 @@ class AuthService {
     // Check if user already exists
     const existingUser = await User.findOne({ where: { email } });
     if (existingUser) {
-      throw new Error("User with this email already exists");
+      const error = new Error("User with this email already exists");
+      error.name = "DuplicateEmailError";
+      throw error;
     }
 
     // Hash password

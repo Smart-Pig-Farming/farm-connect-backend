@@ -64,10 +64,22 @@ class AuthController {
         data: { user: authResponse.user },
       });
     } catch (error: any) {
-      res.status(400).json({
+      // Determine status code and error code based on error type and message
+      let statusCode = 400;
+      let errorCode = "REGISTRATION_FAILED";
+
+      if (error.name === "DuplicateEmailError" || error.message.includes("User with this email already exists")) {
+        statusCode = 409; // Conflict
+        errorCode = "EMAIL_ALREADY_EXISTS";
+      } else if (error.message.includes("validation") || error.message.includes("invalid")) {
+        statusCode = 400;
+        errorCode = "INVALID_DATA";
+      }
+
+      res.status(statusCode).json({
         success: false,
         error: error.message,
-        code: "REGISTRATION_FAILED",
+        code: errorCode,
       });
     }
   }
@@ -113,17 +125,22 @@ class AuthController {
         data: { user: authResponse.user },
       });
     } catch (error: any) {
-      // Determine status code based on error message
+      // Determine status code and error code based on error type and message
       let statusCode = 400;
       let errorCode = "LOGIN_FAILED";
 
-      if (error.message.includes("Invalid email or password")) {
+      // Check for specific error types first
+      if (error.name === "VerificationRequiredError") {
+        statusCode = 403;
+        errorCode = "ACCOUNT_NOT_VERIFIED";
+      } else if (error.message.includes("Invalid email or password")) {
         statusCode = 401;
         errorCode = "INVALID_CREDENTIALS";
       } else if (error.message.includes("locked")) {
         statusCode = 423;
         errorCode = "ACCOUNT_LOCKED";
-      } else if (error.message.includes("verified")) {
+      } else if (error.message.includes("verification") || error.message.includes("verified")) {
+        // Fallback for verification-related errors
         statusCode = 403;
         errorCode = "ACCOUNT_NOT_VERIFIED";
       }
