@@ -1,7 +1,16 @@
 import { Request, Response, NextFunction } from "express";
 import authService from "../services/authService";
+import permissionService from "../services/permissionService";
 import User from "../models/User";
 import Role from "../models/Role";
+import Permission from "../models/Permission";
+
+// TypeScript interface for User with role associations
+interface UserWithRole extends User {
+  role?: Role & {
+    permissions?: Permission[];
+  };
+}
 
 // Extend Request interface to include user
 declare global {
@@ -13,6 +22,8 @@ declare global {
         role: string;
         permissions: string[];
       };
+      userPermissions?: string[];
+      userRoles?: string[];
     }
   }
 }
@@ -48,7 +59,7 @@ export const authenticateToken = async (
     const decoded = await authService.verifyToken(token);
 
     // Get user details
-    const user = await User.findByPk(decoded.userId, {
+    const user = (await User.findByPk(decoded.userId, {
       include: [
         {
           model: Role,
@@ -56,7 +67,7 @@ export const authenticateToken = async (
           attributes: ["name"],
         },
       ],
-    });
+    })) as UserWithRole | null;
 
     if (!user) {
       res.status(401).json({
@@ -74,18 +85,20 @@ export const authenticateToken = async (
       return;
     }
 
-    // TODO: Get actual permissions from RolePermission model
-    const permissions = getDefaultPermissionsByRole(
-      (user as any).role?.name || "farmer"
-    );
+    // Get user permissions from permission service
+    const userPermissions = await permissionService.getUserPermissions(user.id);
 
     // Attach user to request
     req.user = {
       id: user.id,
       email: user.email,
-      role: (user as any).role?.name || "farmer",
-      permissions,
+      role: user.role?.name || "farmer",
+      permissions: userPermissions,
     };
+
+    // Also attach permissions separately for easier access
+    req.userPermissions = userPermissions;
+    req.userRoles = [user.role?.name || "farmer"];
 
     next();
   } catch (error: any) {
@@ -175,46 +188,3 @@ export const requireAnyRole = (roles: string[]) => {
     next();
   };
 };
-
-/**
- * Get default permissions by role (temporary until RolePermission is implemented)
- */
-function getDefaultPermissionsByRole(role: string): string[] {
-  const permissions: Record<string, string[]> = {
-    farmer: [
-      "view_own_profile",
-      "edit_own_profile",
-      "view_best_practices",
-      "participate_discussions",
-      "take_quiz",
-      "view_resources",
-    ],
-    admin: [
-      "manage_users",
-      "manage_roles",
-      "manage_permissions",
-      "view_all_profiles",
-      "edit_all_profiles",
-      "manage_content",
-      "view_analytics",
-      "system_settings",
-    ],
-    vet: [
-      "view_own_profile",
-      "edit_own_profile",
-      "provide_advice",
-      "view_farmer_profiles",
-      "create_content",
-      "moderate_discussions",
-    ],
-    govt: [
-      "view_own_profile",
-      "edit_own_profile",
-      "view_analytics",
-      "create_policy_content",
-      "view_farmer_profiles",
-    ],
-  };
-
-  return permissions[role] || permissions.farmer;
-}

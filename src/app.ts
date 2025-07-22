@@ -2,9 +2,11 @@ import express, { Application, Request, Response, NextFunction } from "express";
 import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
+import cookieParser from "cookie-parser";
 import dotenv from "dotenv";
 import { testConnection } from "./config/database";
 import { runBasicSeeds } from "./seeders/basicSeeds";
+import { runPermissionSeeds } from "./seeders/permissionSeeds";
 import sequelize from "./config/database";
 import "./models"; // Import all models to register associations
 
@@ -14,6 +16,8 @@ dotenv.config();
 // Import routes
 import healthRoutes from "./routes/health";
 import authRoutes from "./routes/auth";
+import adminRoutes from "./routes/admin";
+import testRoutes from "./routes/test";
 
 class App {
   public app: Application;
@@ -40,6 +44,14 @@ class App {
 
       // Run basic seeds (roles and levels)
       await runBasicSeeds();
+
+      //Run permission seeds
+      await runPermissionSeeds();
+
+      // Permission seeds already exist, skipping to avoid conflicts
+      // console.log(
+      //   "Permission seeds already exist, skipping to avoid conflicts"
+      // );
     } catch (error) {
       console.error("Failed to initialize database connection:", error);
       process.exit(1);
@@ -50,10 +62,13 @@ class App {
     // Security middleware
     this.app.use(helmet());
 
+    // Cookie parsing middleware (must be before other parsing middleware)
+    this.app.use(cookieParser());
+
     // CORS middleware
     this.app.use(
       cors({
-        origin: process.env.FRONTEND_URL || "http://localhost:3000",
+        origin: process.env.FRONTEND_URL || "http://localhost:5173",
         credentials: true,
       })
     );
@@ -73,12 +88,24 @@ class App {
     // Authentication routes
     this.app.use("/api/auth", authRoutes);
 
+    // Admin routes
+    this.app.use("/api/admin", adminRoutes);
+
+    // Test routes (for development/testing)
+    this.app.use("/api/test", testRoutes);
+
     // Welcome route
     this.app.get("/", (req: Request, res: Response) => {
       res.json({
         message: "Farm Connect Backend API",
         version: "1.0.0",
         timestamp: new Date().toISOString(),
+        endpoints: {
+          health: "/api/health",
+          auth: "/api/auth",
+          admin: "/api/admin",
+          test: "/api/test",
+        },
       });
     });
   }
