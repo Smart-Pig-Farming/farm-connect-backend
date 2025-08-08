@@ -28,6 +28,26 @@ class AuthController {
    */
   async registerFarmer(req: Request, res: Response): Promise<void> {
     try {
+      // Debug: Log the received request body
+      console.log(
+        "🔍 Registration request body:",
+        JSON.stringify(req.body, null, 2)
+      );
+      console.log(
+        "🔍 firstName value:",
+        req.body.firstName,
+        "(type:",
+        typeof req.body.firstName,
+        ")"
+      );
+      console.log(
+        "🔍 lastName value:",
+        req.body.lastName,
+        "(type:",
+        typeof req.body.lastName,
+        ")"
+      );
+
       const registrationData: RegisterFarmerData = {
         email: req.body.email,
         password: req.body.password,
