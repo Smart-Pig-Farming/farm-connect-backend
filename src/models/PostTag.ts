@@ -1,11 +1,12 @@
 import { DataTypes, Model, Optional } from "sequelize";
 import sequelize from "../config/database";
 
-// PostTag attributes interface (junction table for posts and tags)
+// PostTag attributes interface
 export interface PostTagAttributes {
-  id: string;
-  post_id: string;
-  tag_name: string;
+  id: number;
+  name: string;
+  description: string;
+  is_active: boolean;
   created_at?: Date;
   updated_at?: Date;
 }
@@ -18,9 +19,10 @@ class PostTag
   extends Model<PostTagAttributes, PostTagCreationAttributes>
   implements PostTagAttributes
 {
-  public id!: string;
-  public post_id!: string;
-  public tag_name!: string;
+  public id!: number;
+  public name!: string;
+  public description!: string;
+  public is_active!: boolean;
   public readonly created_at!: Date;
   public readonly updated_at!: Date;
 }
@@ -28,20 +30,22 @@ class PostTag
 PostTag.init(
   {
     id: {
-      type: DataTypes.UUID,
-      defaultValue: DataTypes.UUIDV4,
+      type: DataTypes.INTEGER,
+      autoIncrement: true,
       primaryKey: true,
     },
-    post_id: {
-      type: DataTypes.UUID,
+    name: {
+      type: DataTypes.STRING(100),
       allowNull: false,
-      references: {
-        model: "discussion_posts",
-        key: "id",
-      },
+      unique: true,
     },
-    tag_name: {
-      type: DataTypes.STRING(50),
+    description: {
+      type: DataTypes.TEXT,
+      allowNull: false,
+    },
+    is_active: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: true,
       allowNull: false,
     },
   },
@@ -53,14 +57,10 @@ PostTag.init(
     underscored: true,
     indexes: [
       {
-        fields: ["post_id"],
+        fields: ["name"],
       },
       {
-        fields: ["tag_name"],
-      },
-      {
-        fields: ["post_id", "tag_name"],
-        unique: true,
+        fields: ["is_active"],
       },
     ],
   }

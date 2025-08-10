@@ -8,10 +8,12 @@ import notificationService from "../services/notificationService";
 import DiscussionPost from "../models/DiscussionPost";
 import DiscussionReply from "../models/DiscussionReply";
 import PostMedia from "../models/PostMedia";
-import PostTag from "../models/PostTag";
+import Tag from "../models/Tag";
 import UserVote from "../models/UserVote";
 import ContentReport from "../models/ContentReport";
 import User from "../models/User";
+import { StorageFactory } from "../services/storage/StorageFactory";
+import { MediaStorageService } from "../services/storage/MediaStorageInterface";
 
 // Request interfaces matching frontend expectations
 interface CreatePostRequest {
@@ -60,8 +62,16 @@ interface AuthenticatedRequest extends Request {
 }
 
 class DiscussionController {
+  private _storage?: MediaStorageService;
+
+  private getStorage(): MediaStorageService {
+    if (!this._storage) {
+      this._storage = StorageFactory.createStorageService();
+    }
+    return this._storage;
+  }
   /**
-   * Get posts with pagination, search, and filtering
+   * Get posts with pagination, search, and filtering (supports cursor-based infinite scroll)
    * GET /api/discussions/posts
    */
   async getPosts(req: AuthenticatedRequest, res: Response): Promise<void> {
@@ -74,15 +84,26 @@ class DiscussionController {
         sort = "recent",
         is_market_post,
         user_id,
+        cursor, // New: for infinite scroll
+        include_unapproved,
       } = req.query;
 
-      const offset = (Number(page) - 1) * Number(limit);
+      const limitNum = Number(limit);
+      const pageNum = Number(page);
+      // Use cursor-based pagination if cursor parameter is present (even if empty)
+      const useCursor = req.query.hasOwnProperty("cursor");
 
       // Build where conditions
       const whereConditions: any = {
         is_deleted: false,
-        is_approved: true, // Only show approved posts
       };
+
+      // Add cursor-based pagination for infinite scroll
+      if (cursor && typeof cursor === "string" && cursor.trim() !== "") {
+        whereConditions.created_at = {
+          [Op.lt]: new Date(cursor),
+        };
+      }
 
       // Add search filter
       if (search) {
@@ -103,6 +124,8 @@ class DiscussionController {
         // For user's own posts, show all including non-approved
         delete whereConditions.is_approved;
       }
+
+      // No approval filter: show all posts (approved and pending) in the feed by default
 
       // Build order clause
       let order: any[] = [];
@@ -145,14 +168,29 @@ class DiscussionController {
         {
           model: PostMedia,
           as: "media",
-          attributes: ["id", "url", "media_type", "thumbnail_url"],
+          // Include url and thumbnail_url fields for Cloudinary integration
+          attributes: [
+            "id",
+            "media_type",
+            "storage_key",
+            "file_name",
+            "display_order",
+            "url",
+            "thumbnail_url",
+          ],
           required: false,
+          // Load child rows in a separate query to avoid duplicating the parent rows
+          separate: true,
         },
+        // Include Tag model via many-to-many association
         {
-          model: PostTag,
+          model: Tag,
           as: "tags",
-          attributes: ["tag_name"],
-          required: false,
+          attributes: ["id", "name", "color"],
+          // If a specific tag is requested, make the join required and filter by name
+          required: !!(tag && tag !== "All"),
+          ...(tag && tag !== "All" ? { where: { name: tag } } : {}),
+          through: { attributes: [] },
         },
       ];
 
@@ -162,73 +200,204 @@ class DiscussionController {
           model: UserVote,
           as: "votes",
           where: {
-            user_id: req.user.id.toString(),
-            reply_id: { [Op.is]: null },
+            user_id: req.user.id,
           },
           required: false,
           attributes: ["vote_type"],
+          // Load child rows in a separate query to avoid affecting pagination
+          separate: true,
         });
       }
 
-      // Add tag filter if specified
-      if (tag && tag !== "All") {
-        whereConditions["$tags.tag_name$"] = tag;
-      }
+      // Tag filtering is handled within the Tag include (required + where) above
 
-      const { rows: posts, count: total } =
-        await DiscussionPost.findAndCountAll({
+      // Determine pagination strategy and fetch data
+      const offset = useCursor ? 0 : (pageNum - 1) * limitNum;
+      const actualLimit = useCursor ? limitNum + 1 : limitNum; // Fetch one extra for cursor pagination
+
+      // Build a copy of base filters for counts (facets). We want counts that
+      // reflect the current filters (search, market, user) but ignore:
+      // 1) the selected tag (so chips show potential counts for each tag), and
+      // 2) the cursor (so counts remain stable across pages).
+      const countWhere: any = { ...whereConditions };
+      if (countWhere["$tags.name$"]) delete countWhere["$tags.name$"]; // ignore selected tag
+      if (countWhere.created_at) delete countWhere.created_at; // ignore cursor window
+
+      // Fetch posts and counts in parallel for efficiency
+      const [postsAndCount, tagCountsRaw, totalAll] = await Promise.all([
+        DiscussionPost.findAndCountAll({
           where: whereConditions,
           include,
           order,
-          limit: Number(limit),
+          limit: actualLimit,
           offset,
           distinct: true,
-          subQuery: false,
-        });
+        }),
+        // Grouped counts per tag (including tags with zero via left join)
+        Tag.findAll({
+          attributes: [
+            "id",
+            "name",
+            "color",
+            [
+              sequelize.fn(
+                "COUNT",
+                sequelize.fn("DISTINCT", sequelize.col("posts.id"))
+              ),
+              "postCount",
+            ],
+          ],
+          include: [
+            {
+              model: DiscussionPost,
+              as: "posts",
+              attributes: [],
+              through: { attributes: [] },
+              required: false, // include tags with zero posts under current filters
+              where: countWhere,
+            },
+          ],
+          group: ["Tag.id"],
+          order: [["name", "ASC"]],
+        }),
+        // Overall total across current filters (distinct posts), ignoring cursor and tag
+        DiscussionPost.count({ where: countWhere, distinct: true, col: "id" }),
+      ]);
+
+      // Debug logs to validate query and results (safe for dev)
+      console.log("[discussions:getPosts] params", {
+        limitNum,
+        pageNum,
+        useCursor,
+        tag,
+        is_market_post,
+        user_id,
+        cursor,
+      });
+
+      const { rows: posts, count: total } = postsAndCount;
+      console.log(
+        "[discussions:getPosts] rows",
+        Array.isArray(posts) ? posts.length : 0,
+        Array.isArray(posts) ? posts.map((p: any) => p.id) : []
+      );
+
+      // Handle cursor-based pagination results
+      let finalPosts = posts;
+      let hasNextPage = false;
+      let nextCursor = null;
+
+      if (useCursor && posts.length > limitNum) {
+        finalPosts = posts.slice(0, limitNum);
+        hasNextPage = true;
+        const _last: any = finalPosts[finalPosts.length - 1];
+        const _lastDate: any = _last?.createdAt || _last?.created_at;
+        nextCursor = _lastDate ? new Date(_lastDate).toISOString() : null;
+      } else if (useCursor) {
+        hasNextPage = false;
+      }
 
       // Transform data to match frontend expectations
-      const transformedPosts = posts.map((post: any) => ({
-        id: post.id,
-        title: post.title,
-        content: post.content,
-        author: {
-          id: post.author.id,
-          firstname: post.author.first_name,
-          lastname: post.author.last_name,
-          avatar: post.author.profile?.profile_image_url || null,
-          level_id: this.getUserLevel(post.author.profile?.posts_count || 0),
-          points: this.getUserPoints(post.author.profile),
-          location: post.author.profile?.location || "",
-        },
-        tags: post.tags?.map((tag: any) => tag.tag_name) || [],
-        upvotes: post.upvotes,
-        downvotes: post.downvotes,
-        userVote: post.votes?.[0]?.vote_type || null,
-        replies: post.replies_count,
-        shares: 0, // TODO: Implement shares tracking
-        isMarketPost: post.is_market_post,
-        isAvailable: post.is_available,
-        createdAt: this.formatTimeAgo(post.created_at),
-        images:
-          post.media
-            ?.filter((m: any) => m.media_type === "image")
-            .map((m: any) => m.url) || [],
-        video:
-          post.media?.find((m: any) => m.media_type === "video")?.url || null,
-        isModeratorApproved: post.is_approved,
+      const transformedPosts = finalPosts.map((post: any) => {
+        const mediaItems = (post.media || []).map((m: any) => {
+          const storageKey = m.storage_key;
+          const absoluteUrl =
+            m.url || `/api/discussions/media/${encodeURIComponent(storageKey)}`;
+          const thumbUrl =
+            m.thumbnail_url ||
+            `/api/discussions/media/${encodeURIComponent(
+              storageKey
+            )}/thumbnail`;
+          return {
+            id: m.id,
+            media_type: m.media_type,
+            url: absoluteUrl,
+            thumbnail_url: thumbUrl,
+            original_filename: m.file_name,
+            file_size: Number(m.file_size || 0),
+            display_order: m.display_order || 0,
+          };
+        });
+
+        const images = mediaItems.filter((m: any) => m.media_type === "image");
+        const video =
+          mediaItems.find((m: any) => m.media_type === "video") || null;
+
+        const createdAtRaw: any =
+          (post as any).createdAt || (post as any).created_at;
+        return {
+          id: post.id,
+          title: post.title,
+          content: post.content,
+          author: {
+            id: post.author?.id ?? 0,
+            firstname: post.author?.firstname ?? "",
+            lastname: post.author?.lastname ?? "",
+            avatar: null,
+            level_id: 1,
+            points: (post.author?.points as number) || 0,
+            location: (post.author as any)?.district || "",
+          },
+          tags:
+            post.tags?.map((t: any) => ({
+              id: t.id,
+              name: t.name,
+              color: t.color,
+            })) || [],
+          upvotes: post.upvotes,
+          downvotes: post.downvotes,
+          userVote: post.votes?.[0]?.vote_type || null,
+          replies: post.replies_count ?? 0,
+          shares: 0,
+          isMarketPost: post.is_market_post,
+          isAvailable: post.is_available,
+          createdAt: DiscussionController.formatTimeAgo(createdAtRaw),
+          media: mediaItems,
+          images,
+          video,
+          isModeratorApproved: post.is_approved,
+        };
+      });
+
+      // Build response with appropriate pagination metadata
+      const responseData: any = {
+        posts: transformedPosts,
+      };
+
+      if (useCursor) {
+        // Cursor-based pagination for infinite scroll
+        responseData.pagination = {
+          hasNextPage,
+          nextCursor,
+          count: transformedPosts.length,
+        };
+      } else {
+        // Traditional offset-based pagination
+        responseData.pagination = {
+          page: pageNum,
+          limit: limitNum,
+          total,
+          totalPages: Math.ceil(total / limitNum),
+          hasNextPage: pageNum * limitNum < total,
+        };
+      }
+
+      // Attach facets for header chips: total (All) and per-tag counts
+      const tagCounts = (tagCountsRaw as any[]).map((t) => ({
+        id: t.id,
+        name: t.name,
+        color: t.color,
+        count: Number(t.get ? t.get("postCount") : t.postCount) || 0,
       }));
+
+      responseData.facets = {
+        totals: { all: totalAll as number },
+        tags: tagCounts,
+      };
 
       res.json({
         success: true,
-        data: {
-          posts: transformedPosts,
-          pagination: {
-            page: Number(page),
-            limit: Number(limit),
-            total,
-            totalPages: Math.ceil(total / Number(limit)),
-          },
-        },
+        data: responseData,
       });
     } catch (error) {
       console.error("Error fetching posts:", error);
@@ -236,6 +405,33 @@ class DiscussionController {
         success: false,
         error: "Failed to fetch posts",
       });
+    }
+  }
+
+  /**
+   * Get basic posts statistics (total approved posts, posts created today)
+   * GET /api/discussions/posts/stats
+   */
+  async getStats(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const startOfToday = new Date();
+      startOfToday.setHours(0, 0, 0, 0);
+
+      // Count all posts (approved and pending) for totals and today's posts
+      const [totalDiscussions, postsToday] = await Promise.all([
+        DiscussionPost.count({ where: { is_deleted: false } }),
+        DiscussionPost.count({
+          where: { is_deleted: false, created_at: { [Op.gte]: startOfToday } },
+        }),
+      ]);
+
+      res.json({
+        success: true,
+        data: { totalDiscussions, postsToday },
+      });
+    } catch (error) {
+      console.error("Error fetching posts stats:", error);
+      res.status(500).json({ success: false, error: "Failed to fetch stats" });
     }
   }
 
@@ -303,37 +499,95 @@ class DiscussionController {
 
       // Create tags
       if (tags.length > 0) {
-        const tagPromises = tags.map((tag_name: string) =>
-          PostTag.create(
-            {
-              post_id: post.id,
-              tag_name: tag_name.trim(),
-            },
-            { transaction }
-          )
+        // First find or create the tags
+        const tagInstances = await Promise.all(
+          tags.map(async (tagName: string) => {
+            const [tag] = await Tag.findOrCreate({
+              where: { name: tagName.trim() },
+              defaults: {
+                name: tagName.trim(),
+                color: "#blue", // Default color
+              },
+              transaction,
+            });
+            return tag;
+          })
         );
-        await Promise.all(tagPromises);
+
+        // Then create the post-tag associations via Sequelize helper
+        // Note: requires a DiscussionPost ↔ Tag belongsToMany association with as: "tags"
+        if ((post as any).addTags) {
+          await (post as any).addTags(tagInstances, { transaction });
+        }
       }
 
-      // Create media files
-      if (media_files.length > 0) {
+      // Handle media uploads: prefer uploaded files via multer; fallback to body media_files for legacy usage
+      const files = (req.files as Express.Multer.File[] | undefined) || [];
+      if (files.length > 0) {
+        // Business rules: either multiple images OR a single video
+        const hasVideo = files.some((f) => f.mimetype.startsWith("video/"));
+        const hasImage = files.some((f) => f.mimetype.startsWith("image/"));
+        if (hasVideo && hasImage) {
+          await transaction.rollback();
+          res.status(400).json({
+            success: false,
+            error: "Cannot upload images and video in the same post",
+          });
+          return;
+        }
+        if (hasVideo && files.length > 1) {
+          await transaction.rollback();
+          res.status(400).json({
+            success: false,
+            error: "Only one video file is allowed",
+          });
+          return;
+        }
+
+        const storage = this.getStorage();
+        for (let i = 0; i < files.length; i++) {
+          const f = files[i];
+          const mediaType = f.mimetype.startsWith("video/")
+            ? "video"
+            : ("image" as const);
+          const result = await storage.upload(f.buffer, {
+            postId: post.id,
+            mediaType,
+            fileName: f.originalname,
+            mimeType: f.mimetype,
+            fileSize: f.size,
+          });
+
+          await PostMedia.create(
+            {
+              post_id: post.id,
+              media_type: mediaType,
+              storage_key: result.storageKey,
+              url: result.url,
+              thumbnail_url: result.thumbnailUrl,
+              file_name: f.originalname,
+              file_size: f.size,
+              mime_type: f.mimetype,
+              display_order: i,
+              status: "ready",
+            },
+            { transaction }
+          );
+        }
+      } else if (media_files.length > 0) {
+        // Legacy: accept media descriptors in body (no real upload)
         const mediaPromises = media_files.map((media, index) =>
           PostMedia.create(
             {
               post_id: post.id,
               media_type: media.media_type,
-              file_name: `media-${index}-${Date.now()}`,
-              file_size: 0, // Default, would be set during actual upload
+              storage_key: `media-${index}-${Date.now()}`,
+              file_name: media.thumbnail_url || `media-${index}`,
+              file_size: 0,
               mime_type:
                 media.media_type === "image" ? "image/jpeg" : "video/mp4",
-              file_url: media.url,
-              thumbnail_url: media.thumbnail_url,
-              provider_type: "LOCAL",
-              provider_file_id: `local-${Date.now()}-${index}`,
               display_order: index,
-              is_primary: index === 0,
-              processing_status: "ready",
-              uploaded_at: new Date(),
+              status: "ready",
             },
             { transaction }
           )
@@ -352,9 +606,10 @@ class DiscussionController {
             attributes: ["id", "firstname", "lastname"],
           },
           {
-            model: PostTag,
+            model: Tag,
             as: "tags",
-            attributes: ["tag_name"],
+            attributes: ["name"],
+            through: { attributes: [] },
           },
         ],
       });
@@ -372,12 +627,12 @@ class DiscussionController {
             firstname: postData.author.firstname,
             lastname: postData.author.lastname,
           },
-          tags: postData.tags.map((tag: any) => tag.tag_name),
+          tags: postData.tags.map((tag: any) => tag.name),
           is_market_post: post.is_market_post,
           upvotes: 0,
           downvotes: 0,
           replies_count: 0,
-          created_at: post.created_at.toISOString(),
+          created_at: (post as any).createdAt.toISOString(),
         });
       } catch (wsError) {
         console.error("WebSocket broadcast error:", wsError);
@@ -441,8 +696,8 @@ class DiscussionController {
       const existingVote = await UserVote.findOne({
         where: {
           user_id: req.user.id,
-          post_id: postId,
-          reply_id: undefined,
+          target_type: "post",
+          target_id: postId,
         },
       });
 
@@ -469,7 +724,8 @@ class DiscussionController {
         await UserVote.create(
           {
             user_id: req.user.id,
-            post_id: postId,
+            target_type: "post",
+            target_id: postId,
             vote_type,
           },
           { transaction }
@@ -613,7 +869,7 @@ class DiscussionController {
           avatar: reply.author.profile?.profile_image_url || null,
           level_id: 1, // TODO: Calculate based on activity
         },
-        createdAt: this.formatTimeAgo(reply.created_at),
+        createdAt: DiscussionController.formatTimeAgo((reply as any).createdAt),
         upvotes: reply.upvotes,
         downvotes: reply.downvotes,
         userVote: reply.votes?.[0]?.vote_type || null,
@@ -628,7 +884,9 @@ class DiscussionController {
               avatar: childReply.author.profile?.profile_image_url || null,
               level_id: 1,
             },
-            createdAt: this.formatTimeAgo(childReply.created_at),
+            createdAt: DiscussionController.formatTimeAgo(
+              (childReply as any).createdAt
+            ),
             upvotes: childReply.upvotes,
             downvotes: childReply.downvotes,
             userVote: null, // TODO: Add nested vote tracking
@@ -722,9 +980,6 @@ class DiscussionController {
         { transaction }
       );
 
-      // Update post replies count
-      await post.increment("replies_count", { transaction });
-
       await transaction.commit();
 
       // Fetch the created reply with author info for broadcasting
@@ -755,7 +1010,7 @@ class DiscussionController {
           upvotes: 0,
           downvotes: 0,
           depth,
-          created_at: reply.created_at.toISOString(),
+          created_at: (reply as any).createdAt.toISOString(),
         });
 
         // Send notification to post author
@@ -898,10 +1153,15 @@ class DiscussionController {
     return profile.posts_count * 2 + profile.upvotes_received * 1;
   }
 
-  private formatTimeAgo(date: Date): string {
+  private static formatTimeAgo(
+    date: Date | string | number | null | undefined
+  ): string {
+    if (!date) return "now";
+    const d = date instanceof Date ? date : new Date(date);
+    if (isNaN(d.getTime())) return "now";
     const now = new Date();
     const diffInMinutes = Math.floor(
-      (now.getTime() - date.getTime()) / (1000 * 60)
+      (now.getTime() - d.getTime()) / (1000 * 60)
     );
 
     if (diffInMinutes < 1) return "now";
@@ -913,7 +1173,159 @@ class DiscussionController {
     const diffInDays = Math.floor(diffInHours / 24);
     if (diffInDays < 30) return `${diffInDays}d ago`;
 
-    return date.toLocaleDateString();
+    return d.toLocaleDateString();
+  }
+  /**
+   * Upload media files for a post
+   * POST /api/discussions/posts/:id/media
+   */
+  async uploadMedia(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!req.user) {
+        res
+          .status(401)
+          .json({ success: false, error: "Authentication required" });
+        return;
+      }
+
+      const { id: postId } = req.params as any;
+      const post = await DiscussionPost.findByPk(postId);
+      if (!post || post.is_deleted) {
+        res.status(404).json({ success: false, error: "Post not found" });
+        return;
+      }
+
+      const files = (req.files as Express.Multer.File[] | undefined) || [];
+      if (files.length === 0) {
+        res.status(400).json({ success: false, error: "No files provided" });
+        return;
+      }
+
+      // Business rules
+      const hasVideo = files.some((f) => f.mimetype.startsWith("video/"));
+      const hasImage = files.some((f) => f.mimetype.startsWith("image/"));
+      if (hasVideo && hasImage) {
+        res.status(400).json({
+          success: false,
+          error: "Cannot upload images and video together",
+        });
+        return;
+      }
+      if (hasVideo && files.length > 1) {
+        res
+          .status(400)
+          .json({ success: false, error: "Only one video allowed" });
+        return;
+      }
+
+      const storage = this.getStorage();
+      const created: any[] = [];
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i];
+        const mediaType = f.mimetype.startsWith("video/")
+          ? "video"
+          : ("image" as const);
+        const result = await storage.upload(f.buffer, {
+          postId: post.id,
+          mediaType,
+          fileName: f.originalname,
+          mimeType: f.mimetype,
+          fileSize: f.size,
+        });
+        const pm = await PostMedia.create({
+          post_id: post.id,
+          media_type: mediaType,
+          storage_key: result.storageKey,
+          url: result.url,
+          thumbnail_url: result.thumbnailUrl,
+          file_name: f.originalname,
+          file_size: f.size,
+          mime_type: f.mimetype,
+          display_order: i,
+          status: "ready",
+        });
+        created.push({
+          id: pm.id,
+          media_type: pm.media_type,
+          storage_key: pm.storage_key,
+          file_name: pm.file_name,
+          file_size: Number(pm.file_size || 0),
+          mime_type: pm.mime_type,
+          display_order: pm.display_order || 0,
+        });
+      }
+
+      res.status(201).json({ success: true, data: { media: created } });
+    } catch (error) {
+      console.error("Error uploading media:", error);
+      res.status(500).json({ success: false, error: "Failed to upload media" });
+    }
+  }
+
+  /**
+   * Get media file by storage key
+   * GET /api/discussions/media/:storageKey
+   */
+  async getMedia(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const { storageKey } = req.params as any;
+      const storage = this.getStorage();
+      const url = await storage.getUrl(storageKey);
+      // Redirect to the actual storage URL
+      res.redirect(url);
+    } catch (error) {
+      console.error("Error getting media:", error);
+      res.status(404).json({ success: false, error: "Media not found" });
+    }
+  }
+
+  /**
+   * Get media thumbnail by storage key
+   * GET /api/discussions/media/:storageKey/thumbnail
+   */
+  async getMediaThumbnail(
+    req: AuthenticatedRequest,
+    res: Response
+  ): Promise<void> {
+    try {
+      const { storageKey } = req.params as any;
+      const storage = this.getStorage();
+      const url = await storage.generateThumbnail(storageKey);
+      res.redirect(url);
+    } catch (error) {
+      console.error("Error getting thumbnail:", error);
+      res.status(404).json({ success: false, error: "Thumbnail not found" });
+    }
+  }
+
+  /**
+   * Get all available tags
+   * GET /api/discussions/tags
+   */
+  async getTags(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      const tags = await Tag.findAll({
+        attributes: ["id", "name", "color"],
+        order: [["name", "ASC"]],
+      });
+
+      res.json({
+        success: true,
+        data: {
+          tags: tags.map((tag) => ({
+            id: tag.id,
+            name: tag.name,
+            color: tag.color,
+          })),
+        },
+      });
+    } catch (error) {
+      console.error("Error fetching tags:", error);
+      res.status(500).json({
+        success: false,
+        error: "Failed to fetch tags",
+      });
+    }
   }
 }
 

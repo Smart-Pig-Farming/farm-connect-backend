@@ -1,5 +1,5 @@
-import { DataTypes, Model, Optional } from 'sequelize';
-import sequelize from '../config/database';
+import { DataTypes, Model, Optional } from "sequelize";
+import sequelize from "../config/database";
 
 // Level attributes interface
 export interface LevelAttributes {
@@ -13,11 +13,13 @@ export interface LevelAttributes {
 }
 
 // Creation attributes (id is auto-generated)
-interface LevelCreationAttributes extends Optional<LevelAttributes, 'id'> {}
+interface LevelCreationAttributes extends Optional<LevelAttributes, "id"> {}
 
 // Level model class
-class Level extends Model<LevelAttributes, LevelCreationAttributes> 
-  implements LevelAttributes {
+class Level
+  extends Model<LevelAttributes, LevelCreationAttributes>
+  implements LevelAttributes
+{
   public id!: number;
   public name!: string;
   public description!: string;
@@ -27,41 +29,44 @@ class Level extends Model<LevelAttributes, LevelCreationAttributes>
   public readonly updated_at!: Date;
 }
 
-Level.init({
-  id: {
-    type: DataTypes.INTEGER,
-    autoIncrement: true,
-    primaryKey: true,
-  },
-  name: {
-    type: DataTypes.STRING(100),
-    allowNull: false,
-    unique: true,
-  },
-  description: {
-    type: DataTypes.TEXT,
-    allowNull: false,
-  },
-  min_points: {
-    type: DataTypes.INTEGER,
-    allowNull: false,
-    defaultValue: 0,
-  },
-  max_points: {
-    type: DataTypes.INTEGER,
-    allowNull: false,
-  },
-}, {
-  sequelize,
-  modelName: 'Level',
-  tableName: 'levels',
-  timestamps: true,
-  underscored: true,
-  indexes: [
-    {
-      fields: ['min_points', 'max_points'],
+Level.init(
+  {
+    id: {
+      type: DataTypes.INTEGER,
+      autoIncrement: true,
+      primaryKey: true,
     },
-  ],
-});
+    name: {
+      type: DataTypes.STRING(100),
+      allowNull: false,
+      unique: true,
+    },
+    description: {
+      type: DataTypes.TEXT,
+      allowNull: false,
+    },
+    min_points: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 0,
+    },
+    max_points: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+    },
+  },
+  {
+    sequelize,
+    modelName: "Level",
+    tableName: "levels",
+    timestamps: true,
+    underscored: true,
+    indexes: [
+      {
+        fields: ["min_points", "max_points"],
+      },
+    ],
+  }
+);
 
 export default Level;

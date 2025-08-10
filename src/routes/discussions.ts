@@ -2,11 +2,12 @@ import { Router } from "express";
 import discussionController from "../controllers/discussionController";
 import { authenticateToken } from "../middleware/auth";
 import { handleValidationErrors } from "../middleware/validation";
+import { uploadMedia } from "../middleware/upload";
 import { body, query, param } from "express-validator";
 
 const router = Router();
 
-// Validation rules
+// Validation rules with business logic
 const createPostValidation = [
   body("title")
     .isLength({ min: 10, max: 255 })
@@ -44,27 +45,6 @@ const createReplyValidation = [
     .withMessage("parent_reply_id must be a valid UUID"),
 ];
 
-const reportValidation = [
-  body("content_type")
-    .isIn(["post", "reply"])
-    .withMessage('content_type must be either "post" or "reply"'),
-  body("content_id").isUUID().withMessage("content_id must be a valid UUID"),
-  body("reason")
-    .isIn([
-      "inappropriate",
-      "spam",
-      "fraudulent",
-      "misinformation",
-      "technical",
-      "other",
-    ])
-    .withMessage("Invalid report reason"),
-  body("details")
-    .optional()
-    .isLength({ max: 1000 })
-    .withMessage("Details must be less than 1000 characters"),
-];
-
 const queryValidation = [
   query("page")
     .optional()
@@ -78,6 +58,38 @@ const queryValidation = [
     .optional()
     .isIn(["recent", "popular", "replies"])
     .withMessage("Sort must be one of: recent, popular, replies"),
+  query("search")
+    .optional()
+    .isLength({ min: 1, max: 255 })
+    .withMessage("Search query must be between 1 and 255 characters"),
+  query("tag")
+    .optional()
+    .isLength({ min: 1, max: 50 })
+    .withMessage("Tag name must be between 1 and 50 characters"),
+  query("cursor")
+    .optional()
+    .custom((value) => {
+      // Allow empty string for initial infinite scroll request
+      if (value === "" || value === undefined || value === null) {
+        return true;
+      }
+      // Validate as ISO8601 if provided
+      const iso8601Regex = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{3})?Z?$/;
+      if (!iso8601Regex.test(value)) {
+        throw new Error(
+          "Cursor must be a valid ISO 8601 timestamp or empty for initial request"
+        );
+      }
+      return true;
+    }),
+  query("is_market_post")
+    .optional()
+    .isBoolean()
+    .withMessage("is_market_post must be a boolean"),
+  query("user_id")
+    .optional()
+    .isInt({ min: 1 })
+    .withMessage("user_id must be a positive integer"),
 ];
 
 const uuidValidation = [
@@ -99,13 +111,27 @@ router.get(
 );
 
 /**
+ * @route   GET /api/discussions/posts/stats
+ * @desc    Get stats for discussions (total approved, posts today)
+ * @access  Public
+ */
+router.get("/posts/stats", discussionController.getStats);
+
+/**
  * @route   POST /api/discussions/posts
- * @desc    Create a new discussion post
+ * @desc    Create a new discussion post with optional media upload
+ * @business_rules:
+ *   - Text content: Required (20-10,000 chars)
+ *   - Images: 0-4 allowed (jpg, png, gif, webp)
+ *   - Video: 0-1 allowed (mp4, mov, avi, webm)
+ *   - Cannot have both images AND video in same post
+ *   - Tags: Maximum 3 allowed
  * @access  Private (authenticated users only)
  */
 router.post(
   "/posts",
   authenticateToken,
+  uploadMedia, // Always include media middleware (handles no files gracefully)
   createPostValidation,
   handleValidationErrors,
   discussionController.createPost
@@ -153,16 +179,41 @@ router.post(
 );
 
 /**
- * @route   POST /api/discussions/reports
- * @desc    Report content (post or reply)
+ * @route   POST /api/discussions/posts/:id/media
+ * @desc    Upload media files for a specific post
  * @access  Private (authenticated users only)
  */
 router.post(
-  "/reports",
+  "/posts/:id/media",
   authenticateToken,
-  reportValidation,
+  uuidValidation,
   handleValidationErrors,
-  discussionController.reportContent
+  uploadMedia,
+  discussionController.uploadMedia
 );
+
+/**
+ * @route   GET /api/discussions/media/:storageKey
+ * @desc    Get media file by storage key
+ * @access  Public
+ */
+router.get("/media/:storageKey", discussionController.getMedia);
+
+/**
+ * @route   GET /api/discussions/media/:storageKey/thumbnail
+ * @desc    Get media thumbnail by storage key
+ * @access  Public
+ */
+router.get(
+  "/media/:storageKey/thumbnail",
+  discussionController.getMediaThumbnail
+);
+
+/**
+ * @route   GET /api/discussions/tags
+ * @desc    Get all available tags
+ * @access  Public
+ */
+router.get("/tags", discussionController.getTags);
 
 export default router;

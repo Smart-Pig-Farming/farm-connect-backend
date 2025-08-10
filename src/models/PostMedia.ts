@@ -5,46 +5,32 @@ import DiscussionPost from "./DiscussionPost";
 // Post Media attributes interface
 export interface PostMediaAttributes {
   id: string;
-  post_id: string; // FK to DiscussionPost
+  post_id: string;
 
-  // File details
+  // Media type and file details
   media_type: "image" | "video";
+  storage_key: string; // Abstract storage key
   file_name: string;
   file_size: number;
   mime_type: string;
 
-  // URLs (provider-agnostic)
-  file_url: string; // Main file URL
-  thumbnail_url?: string; // Video thumbnail OR image thumbnail
-  preview_url?: string; // Smaller preview for loading
-
-  // Provider details (for switching providers)
-  provider_type: string; // 'S3', 'CLOUDINARY', 'GOOGLE_DRIVE', 'LOCAL'
-  provider_file_id: string; // External provider's file ID
-
-  // Organization
-  display_order: number; // For frontend array ordering
-  is_primary: boolean; // Main image/video for post
+  // Display
+  display_order: number;
 
   // Processing status
-  processing_status: "uploading" | "processing" | "ready" | "failed";
+  status: "uploading" | "ready" | "failed";
 
-  // Metadata
-  width?: number; // Image/video width
-  height?: number; // Image/video height
-  duration?: number; // Video duration in seconds
+  // Resolved URLs (optional, filled after upload to remote storage)
+  url?: string;
+  thumbnail_url?: string;
 
   // Timestamps
-  uploaded_at: Date;
-  processed_at?: Date;
+  created_at?: Date;
 }
 
 // Creation attributes
 interface PostMediaCreationAttributes
-  extends Optional<
-    PostMediaAttributes,
-    "id" | "display_order" | "is_primary" | "processing_status"
-  > {}
+  extends Optional<PostMediaAttributes, "id" | "display_order" | "status"> {}
 
 // PostMedia model class
 class PostMedia
@@ -54,22 +40,15 @@ class PostMedia
   public id!: string;
   public post_id!: string;
   public media_type!: "image" | "video";
+  public storage_key!: string;
   public file_name!: string;
   public file_size!: number;
   public mime_type!: string;
-  public file_url!: string;
-  public thumbnail_url?: string;
-  public preview_url?: string;
-  public provider_type!: string;
-  public provider_file_id!: string;
   public display_order!: number;
-  public is_primary!: boolean;
-  public processing_status!: "uploading" | "processing" | "ready" | "failed";
-  public width?: number;
-  public height?: number;
-  public duration?: number;
-  public readonly uploaded_at!: Date;
-  public processed_at?: Date;
+  public status!: "uploading" | "ready" | "failed";
+  public url?: string;
+  public thumbnail_url?: string;
+  public readonly created_at!: Date;
 
   // Association declarations
   public static associations: {
@@ -96,6 +75,10 @@ PostMedia.init(
       type: DataTypes.ENUM("image", "video"),
       allowNull: false,
     },
+    storage_key: {
+      type: DataTypes.STRING(500),
+      allowNull: false,
+    },
     file_name: {
       type: DataTypes.STRING(255),
       allowNull: false,
@@ -103,82 +86,25 @@ PostMedia.init(
     file_size: {
       type: DataTypes.BIGINT,
       allowNull: false,
-      validate: {
-        min: 1,
-        max: 512 * 1024 * 1024, // 512MB max file size
-      },
     },
     mime_type: {
       type: DataTypes.STRING(100),
       allowNull: false,
     },
-    file_url: {
-      type: DataTypes.TEXT,
-      allowNull: false,
-    },
-    thumbnail_url: {
-      type: DataTypes.TEXT,
-      allowNull: true,
-    },
-    preview_url: {
-      type: DataTypes.TEXT,
-      allowNull: true,
-    },
-    provider_type: {
-      type: DataTypes.STRING(50),
-      allowNull: false,
-      defaultValue: "LOCAL",
-    },
-    provider_file_id: {
-      type: DataTypes.STRING(255),
-      allowNull: false,
-    },
     display_order: {
       type: DataTypes.INTEGER,
       defaultValue: 0,
-      allowNull: false,
-      validate: {
-        min: 0,
-      },
     },
-    is_primary: {
-      type: DataTypes.BOOLEAN,
-      defaultValue: false,
-      allowNull: false,
-    },
-    processing_status: {
-      type: DataTypes.ENUM("uploading", "processing", "ready", "failed"),
+    status: {
+      type: DataTypes.ENUM("uploading", "ready", "failed"),
       defaultValue: "uploading",
-      allowNull: false,
     },
-    width: {
-      type: DataTypes.INTEGER,
+    url: {
+      type: DataTypes.STRING(1000),
       allowNull: true,
-      validate: {
-        min: 1,
-      },
     },
-    height: {
-      type: DataTypes.INTEGER,
-      allowNull: true,
-      validate: {
-        min: 1,
-      },
-    },
-    duration: {
-      type: DataTypes.FLOAT,
-      allowNull: true,
-      validate: {
-        min: 0,
-      },
-    },
-    uploaded_at: {
-      type: DataTypes.DATE,
-      defaultValue: DataTypes.NOW,
-      allowNull: false,
-    },
-    processed_at: {
-      type: DataTypes.DATE,
+    thumbnail_url: {
+      type: DataTypes.STRING(1000),
       allowNull: true,
     },
   },
@@ -186,25 +112,13 @@ PostMedia.init(
     sequelize,
     modelName: "PostMedia",
     tableName: "post_media",
-    timestamps: false, // Using custom uploaded_at/processed_at
+    timestamps: false,
     underscored: true,
+    createdAt: "created_at",
+    updatedAt: false,
     indexes: [
       {
-        fields: ["post_id"],
-      },
-      {
-        fields: ["media_type"],
-      },
-      {
-        fields: ["processing_status"],
-      },
-      {
-        fields: ["provider_type", "provider_file_id"],
-        unique: true, // Prevent duplicate files from same provider
-      },
-      {
-        // Composite index for post media queries
-        fields: ["post_id", "media_type", "display_order"],
+        fields: ["post_id", "display_order"],
       },
     ],
   }

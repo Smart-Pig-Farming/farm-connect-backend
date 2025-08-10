@@ -1,7 +1,7 @@
-import { DataTypes, Model, Optional, Association } from 'sequelize';
-import sequelize from '../config/database';
-import Resource from './Resource';
-import Action from './Action';
+import { DataTypes, Model, Optional, Association } from "sequelize";
+import sequelize from "../config/database";
+import Resource from "./Resource";
+import Action from "./Action";
 
 // Permission attributes interface
 export interface PermissionAttributes {
@@ -16,11 +16,14 @@ export interface PermissionAttributes {
 }
 
 // Creation attributes (id is auto-generated)
-interface PermissionCreationAttributes extends Optional<PermissionAttributes, 'id'> {}
+interface PermissionCreationAttributes
+  extends Optional<PermissionAttributes, "id"> {}
 
 // Permission model class
-class Permission extends Model<PermissionAttributes, PermissionCreationAttributes> 
-  implements PermissionAttributes {
+class Permission
+  extends Model<PermissionAttributes, PermissionCreationAttributes>
+  implements PermissionAttributes
+{
   public id!: number;
   public name!: string;
   public description!: string;
@@ -37,57 +40,60 @@ class Permission extends Model<PermissionAttributes, PermissionCreationAttribute
   };
 }
 
-Permission.init({
-  id: {
-    type: DataTypes.INTEGER,
-    autoIncrement: true,
-    primaryKey: true,
-  },
-  name: {
-    type: DataTypes.STRING(150),
-    allowNull: false,
-    unique: true,
-  },
-  description: {
-    type: DataTypes.TEXT,
-    allowNull: false,
-  },
-  is_active: {
-    type: DataTypes.BOOLEAN,
-    defaultValue: true,
-    allowNull: false,
-  },
-  resource_id: {
-    type: DataTypes.INTEGER,
-    allowNull: false,
-    references: {
-      model: Resource,
-      key: 'id',
+Permission.init(
+  {
+    id: {
+      type: DataTypes.INTEGER,
+      autoIncrement: true,
+      primaryKey: true,
     },
-  },
-  action_id: {
-    type: DataTypes.INTEGER,
-    allowNull: false,
-    references: {
-      model: Action,
-      key: 'id',
-    },
-  },
-}, {
-  sequelize,
-  modelName: 'Permission',
-  tableName: 'permissions',
-  timestamps: true,
-  underscored: true,
-  indexes: [
-    {
+    name: {
+      type: DataTypes.STRING(150),
+      allowNull: false,
       unique: true,
-      fields: ['resource_id', 'action_id'],
     },
-    {
-      fields: ['is_active'],
+    description: {
+      type: DataTypes.TEXT,
+      allowNull: false,
     },
-  ],
-});
+    is_active: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: true,
+      allowNull: false,
+    },
+    resource_id: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      references: {
+        model: Resource,
+        key: "id",
+      },
+    },
+    action_id: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      references: {
+        model: Action,
+        key: "id",
+      },
+    },
+  },
+  {
+    sequelize,
+    modelName: "Permission",
+    tableName: "permissions",
+    timestamps: true,
+    underscored: true,
+    indexes: [
+      {
+        unique: true,
+        fields: ["resource_id", "action_id"],
+      },
+      {
+        fields: ["is_active"],
+      },
+    ],
+  }
+);
 
 export default Permission;

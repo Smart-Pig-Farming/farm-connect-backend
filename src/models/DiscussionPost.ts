@@ -2,17 +2,16 @@ import { DataTypes, Model, Optional, Association } from "sequelize";
 import sequelize from "../config/database";
 import User from "./User";
 
-// Discussion Post attributes interface - designed for frontend expectations
+// Discussion Post attributes interface
 export interface DiscussionPostAttributes {
-  id: string; // UUID for frontend compatibility
+  id: string;
   title: string;
-  content: string; // Direct field name match
-  author_id: number; // FK to User (integer)
+  content: string;
+  author_id: number;
 
-  // Engagement metrics (denormalized for performance)
+  // Simple engagement metrics
   upvotes: number;
   downvotes: number;
-  replies_count: number;
 
   // Market post specifics
   is_market_post: boolean;
@@ -35,12 +34,7 @@ export interface DiscussionPostAttributes {
 interface DiscussionPostCreationAttributes
   extends Optional<
     DiscussionPostAttributes,
-    | "id"
-    | "upvotes"
-    | "downvotes"
-    | "replies_count"
-    | "is_approved"
-    | "is_deleted"
+    "id" | "upvotes" | "downvotes" | "is_approved" | "is_deleted"
   > {}
 
 // DiscussionPost model class
@@ -54,7 +48,6 @@ class DiscussionPost
   public author_id!: number;
   public upvotes!: number;
   public downvotes!: number;
-  public replies_count!: number;
   public is_market_post!: boolean;
   public is_available!: boolean;
   public is_approved!: boolean;
@@ -67,10 +60,10 @@ class DiscussionPost
   // Association declarations
   public static associations: {
     author: Association<DiscussionPost, User>;
-    replies: Association<DiscussionPost, any>; // Will define DiscussionReply later
-    media: Association<DiscussionPost, any>; // Will define PostMedia later
-    tags: Association<DiscussionPost, any>; // Will define PostTag later
-    votes: Association<DiscussionPost, any>; // Will define UserVote later
+    replies: Association<DiscussionPost, any>;
+    media: Association<DiscussionPost, any>;
+    tags: Association<DiscussionPost, any>;
+    votes: Association<DiscussionPost, any>;
   };
 }
 
@@ -85,14 +78,14 @@ DiscussionPost.init(
       type: DataTypes.STRING(255),
       allowNull: false,
       validate: {
-        len: [10, 255], // Frontend validation: min 10 chars
+        len: [10, 255],
       },
     },
     content: {
       type: DataTypes.TEXT,
       allowNull: false,
       validate: {
-        len: [20, 10000], // Frontend validation: min 20 chars, max 10k
+        len: [20, 10000],
       },
     },
     author_id: {
@@ -112,14 +105,6 @@ DiscussionPost.init(
       },
     },
     downvotes: {
-      type: DataTypes.INTEGER,
-      defaultValue: 0,
-      allowNull: false,
-      validate: {
-        min: 0,
-      },
-    },
-    replies_count: {
       type: DataTypes.INTEGER,
       defaultValue: 0,
       allowNull: false,
@@ -180,12 +165,7 @@ DiscussionPost.init(
         fields: ["is_market_post"],
       },
       {
-        // Composite index for feed queries
         fields: ["is_deleted", "is_approved", "created_at"],
-      },
-      {
-        // Index for popular posts (upvotes - downvotes)
-        fields: ["upvotes", "downvotes"],
       },
     ],
   }

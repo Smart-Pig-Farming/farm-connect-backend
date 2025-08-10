@@ -18,6 +18,7 @@ import healthRoutes from "./routes/health";
 import authRoutes from "./routes/auth";
 import adminRoutes from "./routes/admin";
 import testRoutes from "./routes/test";
+import discussionRoutes from "./routes/discussions";
 
 class App {
   public app: Application;
@@ -37,10 +38,10 @@ class App {
     try {
       await testConnection();
 
-      // Sync database models (create tables)
-      console.log("Syncing database models...");
-      await sequelize.sync({ force: false }); // Set to true to drop and recreate tables
-      console.log("Database models synced successfully");
+      // Authenticate database connection (don't sync since we use migrations)
+      console.log("Authenticating database connection...");
+      await sequelize.authenticate();
+      console.log("Database connection authenticated successfully");
 
       // Run basic seeds (roles and levels)
       await runBasicSeeds();
@@ -90,6 +91,9 @@ class App {
 
     // Admin routes
     this.app.use("/api/admin", adminRoutes);
+
+    // Discussion routes
+    this.app.use("/api/discussions", discussionRoutes);
 
     // Test routes (for development/testing)
     this.app.use("/api/test", testRoutes);

@@ -5,18 +5,18 @@ import DiscussionPost from "./DiscussionPost";
 
 // Discussion Reply attributes interface
 export interface DiscussionReplyAttributes {
-  id: string; // UUID
+  id: string;
   content: string;
-  post_id: string; // FK to DiscussionPost
-  parent_reply_id?: string; // FK to DiscussionReply (for nesting)
-  author_id: number; // FK to User
+  post_id: string;
+  parent_reply_id?: string;
+  author_id: number;
 
   // Engagement metrics
   upvotes: number;
   downvotes: number;
 
   // Hierarchy
-  depth: number; // 0 = top-level, 1 = nested, etc.
+  depth: number;
 
   // Status
   is_deleted: boolean;
@@ -56,7 +56,7 @@ class DiscussionReply
     post: Association<DiscussionReply, DiscussionPost>;
     parentReply: Association<DiscussionReply, DiscussionReply>;
     childReplies: Association<DiscussionReply, DiscussionReply>;
-    votes: Association<DiscussionReply, any>; // Will define UserVote later
+    votes: Association<DiscussionReply, any>;
   };
 }
 
@@ -71,7 +71,7 @@ DiscussionReply.init(
       type: DataTypes.TEXT,
       allowNull: false,
       validate: {
-        len: [5, 5000], // Frontend validation: min 5 chars, max 5k
+        len: [5, 5000],
       },
     },
     post_id: {
@@ -86,7 +86,7 @@ DiscussionReply.init(
       type: DataTypes.UUID,
       allowNull: true,
       references: {
-        model: "discussion_replies", // Self-reference
+        model: "discussion_replies",
         key: "id",
       },
     },
@@ -120,7 +120,7 @@ DiscussionReply.init(
       allowNull: false,
       validate: {
         min: 0,
-        max: 5, // Limit nesting depth for UI performance
+        max: 3,
       },
     },
     is_deleted: {
@@ -146,18 +146,7 @@ DiscussionReply.init(
         fields: ["parent_reply_id"],
       },
       {
-        fields: ["is_deleted"],
-      },
-      {
         fields: ["created_at"],
-      },
-      {
-        // Composite index for post replies query
-        fields: ["post_id", "is_deleted", "created_at"],
-      },
-      {
-        // Index for nested replies
-        fields: ["parent_reply_id", "depth"],
       },
     ],
   }

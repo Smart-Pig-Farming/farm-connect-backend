@@ -28,7 +28,6 @@ class AuthController {
    */
   async registerFarmer(req: Request, res: Response): Promise<void> {
     try {
-
       const registrationData: RegisterFarmerData = {
         email: req.body.email,
         password: req.body.password,
