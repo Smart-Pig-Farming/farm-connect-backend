@@ -8,7 +8,7 @@ export interface DiscussionReplyAttributes {
   id: string;
   content: string;
   post_id: string;
-  parent_reply_id?: string;
+  parent_reply_id?: string | null;
   author_id: number;
 
   // Engagement metrics
@@ -41,7 +41,7 @@ class DiscussionReply
   public id!: string;
   public content!: string;
   public post_id!: string;
-  public parent_reply_id?: string;
+  public parent_reply_id?: string | null;
   public author_id!: number;
   public upvotes!: number;
   public downvotes!: number;

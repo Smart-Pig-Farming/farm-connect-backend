@@ -12,6 +12,7 @@ export interface DiscussionPostAttributes {
   // Simple engagement metrics
   upvotes: number;
   downvotes: number;
+  replies_count?: number;
 
   // Market post specifics
   is_market_post: boolean;
@@ -48,6 +49,7 @@ class DiscussionPost
   public author_id!: number;
   public upvotes!: number;
   public downvotes!: number;
+  public replies_count?: number;
   public is_market_post!: boolean;
   public is_available!: boolean;
   public is_approved!: boolean;
@@ -105,6 +107,14 @@ DiscussionPost.init(
       },
     },
     downvotes: {
+      type: DataTypes.INTEGER,
+      defaultValue: 0,
+      allowNull: false,
+      validate: {
+        min: 0,
+      },
+    },
+    replies_count: {
       type: DataTypes.INTEGER,
       defaultValue: 0,
       allowNull: false,

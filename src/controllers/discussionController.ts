@@ -1209,6 +1209,167 @@ class DiscussionController {
   }
 
   /**
+   * Update a post (owner-only)
+   * PATCH /api/discussions/posts/:id
+   */
+  async updatePost(req: AuthenticatedRequest, res: Response): Promise<void> {
+    const transaction: Transaction = await sequelize.transaction();
+    try {
+      if (!req.user) {
+        res
+          .status(401)
+          .json({ success: false, error: "Authentication required" });
+        return;
+      }
+
+      const { id: postId } = req.params as any;
+      const post = await DiscussionPost.findByPk(postId);
+      if (!post || post.is_deleted) {
+        res.status(404).json({ success: false, error: "Post not found" });
+        return;
+      }
+
+      // Owner-only update
+      if (post.author_id !== req.user.id) {
+        res.status(403).json({ success: false, error: "Permission denied" });
+        return;
+      }
+
+      const { title, content, tags, is_available } = req.body as any;
+
+      // Apply field-level validations for provided fields (route also validates)
+      if (typeof title !== "undefined") {
+        if (!title || title.length < 10 || title.length > 255) {
+          res.status(400).json({
+            success: false,
+            error: "Title must be between 10 and 255 characters",
+          });
+          return;
+        }
+        post.title = title;
+      }
+
+      if (typeof content !== "undefined") {
+        if (!content || content.length < 20 || content.length > 10000) {
+          res.status(400).json({
+            success: false,
+            error: "Content must be between 20 and 10,000 characters",
+          });
+          return;
+        }
+        post.content = content;
+      }
+
+      // Only allow is_available toggle; non-market posts are always available
+      if (typeof is_available !== "undefined") {
+        if (typeof is_available !== "boolean") {
+          res
+            .status(400)
+            .json({ success: false, error: "is_available must be a boolean" });
+          return;
+        }
+        if (post.is_market_post) {
+          post.is_available = is_available;
+        }
+      }
+
+      await post.save({ transaction });
+
+      // Handle tags if provided
+      if (typeof tags !== "undefined") {
+        if (!Array.isArray(tags) || tags.length > 3) {
+          await transaction.rollback();
+          res.status(400).json({
+            success: false,
+            error: "tags must be an array with up to 3 items",
+          });
+          return;
+        }
+        const tagInstances = await Promise.all(
+          tags.map(async (tagName: string) => {
+            const name = String(tagName || "").trim();
+            if (!name) return null as any;
+            const [tag] = await Tag.findOrCreate({
+              where: { name },
+              defaults: { name, color: "#blue" },
+              transaction,
+            });
+            return tag;
+          })
+        );
+        const finalTags = tagInstances.filter(Boolean);
+        if ((post as any).setTags) {
+          await (post as any).setTags(finalTags, { transaction });
+        }
+      }
+
+      await transaction.commit();
+
+      // Reload the post with associations for response and broadcasting
+      const updatedPost = await DiscussionPost.findByPk(post.id, {
+        include: [
+          {
+            model: User,
+            as: "author",
+            attributes: ["id", "firstname", "lastname"],
+          },
+          {
+            model: Tag,
+            as: "tags",
+            attributes: ["name"],
+            through: { attributes: [] },
+          },
+          {
+            model: PostMedia,
+            as: "media",
+            attributes: [
+              "id",
+              "media_type",
+              "url",
+              "thumbnail_url",
+              "display_order",
+            ],
+            separate: true,
+            required: false,
+          },
+        ],
+      });
+
+      // Broadcast update
+      try {
+        const ws = getWebSocketService();
+        const p: any = updatedPost as any;
+        ws.broadcastPostUpdate({
+          id: p.id,
+          title: p.title,
+          content: p.content,
+          tags: (p.tags || []).map((t: any) => t.name),
+          is_market_post: p.is_market_post,
+          is_available: p.is_available,
+          is_approved: p.is_approved,
+          media: (p.media || []).map((m: any) => ({
+            id: m.id,
+            media_type: m.media_type,
+            url: m.url,
+            thumbnail_url: m.thumbnail_url,
+            display_order: m.display_order,
+          })),
+          updated_at:
+            (p as any).updatedAt?.toISOString?.() || new Date().toISOString(),
+        });
+      } catch (wsError) {
+        console.error("WebSocket broadcast error (post:update):", wsError);
+      }
+
+      res.json({ success: true, data: { id: post.id } });
+    } catch (error) {
+      await transaction.rollback();
+      console.error("Error updating post:", error);
+      res.status(500).json({ success: false, error: "Failed to update post" });
+    }
+  }
+
+  /**
    * Soft delete a post (author or users with moderation/manage privileges)
    * DELETE /api/discussions/posts/:id
    */
@@ -1274,6 +1435,7 @@ class DiscussionController {
 
       const offset = (Number(page) - 1) * Number(limit);
 
+      // Base include for author and one level of children
       const include: any[] = [
         {
           model: User,
@@ -1305,6 +1467,46 @@ class DiscussionController {
               ],
               required: false,
             },
+            // Nested user vote for level 1 children
+            ...(req.user
+              ? [
+                  {
+                    model: UserVote,
+                    as: "votes",
+                    where: { user_id: req.user.id },
+                    required: false,
+                    attributes: ["vote_type"],
+                    separate: false,
+                  },
+                ]
+              : []),
+            // Grandchildren level (depth 2)
+            {
+              model: DiscussionReply,
+              as: "childReplies",
+              include: [
+                {
+                  model: User,
+                  as: "author",
+                  attributes: ["id", "firstname", "lastname"],
+                  required: false,
+                },
+                // Nested user vote for level 2 children
+                ...(req.user
+                  ? [
+                      {
+                        model: UserVote,
+                        as: "votes",
+                        where: { user_id: req.user.id },
+                        required: false,
+                        attributes: ["vote_type"],
+                        separate: false,
+                      },
+                    ]
+                  : []),
+              ],
+              required: false,
+            },
           ],
           required: false,
         },
@@ -1315,16 +1517,17 @@ class DiscussionController {
         include.push({
           model: UserVote,
           as: "votes",
-          where: { user_id: req.user.id, post_id: null },
+          where: { user_id: req.user.id },
           required: false,
           attributes: ["vote_type"],
+          separate: false,
         });
       }
 
       const replies = await DiscussionReply.findAll({
         where: {
           post_id: postId,
-          parent_reply_id: undefined, // Only top-level replies
+          parent_reply_id: { [Op.is]: null }, // Only top-level replies
           is_deleted: false,
         },
         include,
@@ -1333,44 +1536,84 @@ class DiscussionController {
         offset,
       });
 
-      const transformedReplies = replies.map((reply: any) => ({
-        id: reply.id,
-        content: reply.content,
-        author: {
-          id: reply.author.id,
-          firstname: reply.author.first_name,
-          lastname: reply.author.last_name,
-          avatar: reply.author.profile?.profile_image_url || null,
-          level_id: 1, // TODO: Calculate based on activity
+      // Total count for pagination (top-level only)
+      const total = await DiscussionReply.count({
+        where: {
+          post_id: postId,
+          parent_reply_id: { [Op.is]: null },
+          is_deleted: false,
         },
-        createdAt: DiscussionController.formatTimeAgo((reply as any).createdAt),
-        upvotes: reply.upvotes,
-        downvotes: reply.downvotes,
-        userVote: reply.votes?.[0]?.vote_type || null,
-        replies:
-          reply.childReplies?.map((childReply: any) => ({
-            id: childReply.id,
-            content: childReply.content,
-            author: {
-              id: childReply.author.id,
-              firstname: childReply.author.first_name,
-              lastname: childReply.author.last_name,
-              avatar: childReply.author.profile?.profile_image_url || null,
-              level_id: 1,
-            },
-            createdAt: DiscussionController.formatTimeAgo(
-              (childReply as any).createdAt
-            ),
-            upvotes: childReply.upvotes,
-            downvotes: childReply.downvotes,
-            userVote: null, // TODO: Add nested vote tracking
-          })) || [],
-      }));
+      });
+
+      // Helper to map nested replies recursively up to depth 3
+      const mapReply = (r: any): any => ({
+        id: r.id,
+        content: r.content,
+        author: {
+          id: r.author?.id,
+          firstname: r.author?.firstname,
+          lastname: r.author?.lastname,
+          avatar: null,
+          level_id: 1,
+        },
+        createdAt: DiscussionController.formatTimeAgo((r as any).createdAt),
+        upvotes: r.upvotes,
+        downvotes: r.downvotes,
+        userVote: r.votes?.[0]?.vote_type || null,
+        childReplies: Array.isArray(r.childReplies)
+          ? r.childReplies.map((c: any) => ({
+              id: c.id,
+              content: c.content,
+              author: {
+                id: c.author?.id,
+                firstname: c.author?.firstname,
+                lastname: c.author?.lastname,
+                avatar: null,
+                level_id: 1,
+              },
+              createdAt: DiscussionController.formatTimeAgo(
+                (c as any).createdAt
+              ),
+              upvotes: c.upvotes,
+              downvotes: c.downvotes,
+              userVote: c.votes?.[0]?.vote_type || null,
+              childReplies: Array.isArray(c.childReplies)
+                ? c.childReplies.map((gc: any) => ({
+                    id: gc.id,
+                    content: gc.content,
+                    author: {
+                      id: gc.author?.id,
+                      firstname: gc.author?.firstname,
+                      lastname: gc.author?.lastname,
+                      avatar: null,
+                      level_id: 1,
+                    },
+                    createdAt: DiscussionController.formatTimeAgo(
+                      (gc as any).createdAt
+                    ),
+                    upvotes: gc.upvotes,
+                    downvotes: gc.downvotes,
+                    userVote: gc.votes?.[0]?.vote_type || null,
+                    childReplies: [],
+                  }))
+                : [],
+            }))
+          : [],
+      });
+
+      const transformedReplies = replies.map(mapReply);
 
       res.json({
         success: true,
         data: {
           replies: transformedReplies,
+          pagination: {
+            page: Number(page),
+            limit: Number(limit),
+            total,
+            totalPages: Math.ceil(total / Number(limit)),
+            hasNextPage: offset + Number(limit) < total,
+          },
         },
       });
     } catch (error) {
@@ -1379,6 +1622,136 @@ class DiscussionController {
         success: false,
         error: "Failed to fetch replies",
       });
+    }
+  }
+
+  /**
+   * Vote on a reply
+   * POST /api/discussions/replies/:id/vote
+   */
+  async voteReply(req: AuthenticatedRequest, res: Response): Promise<void> {
+    const transaction: Transaction = await sequelize.transaction();
+
+    try {
+      if (!req.user) {
+        res
+          .status(401)
+          .json({ success: false, error: "Authentication required" });
+        return;
+      }
+
+      const { id: replyId } = req.params as any;
+      const { vote_type }: VoteRequest = req.body as any;
+
+      if (!["upvote", "downvote"].includes(vote_type)) {
+        res.status(400).json({
+          success: false,
+          error: 'Invalid vote type. Must be "upvote" or "downvote"',
+        });
+        return;
+      }
+
+      // Load reply and its post id for room broadcast
+      const reply = await DiscussionReply.findByPk(replyId, {
+        include: [
+          {
+            model: DiscussionPost,
+            as: "post",
+            attributes: ["id"],
+          },
+        ],
+      });
+
+      if (!reply || reply.is_deleted) {
+        res.status(404).json({ success: false, error: "Reply not found" });
+        return;
+      }
+
+      const postId = (reply as any).post?.id as string;
+
+      const existingVote = await UserVote.findOne({
+        where: {
+          user_id: req.user.id,
+          target_type: "reply",
+          target_id: replyId,
+        },
+      });
+
+      let voteChange = { upvotes: 0, downvotes: 0 } as any;
+      let finalUserVote: "upvote" | "downvote" | null = vote_type;
+
+      if (existingVote) {
+        if (existingVote.vote_type === vote_type) {
+          // Toggle off
+          await existingVote.destroy({ transaction });
+          voteChange[
+            existingVote.vote_type === "upvote" ? "upvotes" : "downvotes"
+          ] = -1;
+          finalUserVote = null;
+        } else {
+          const oldType = existingVote.vote_type;
+          existingVote.vote_type = vote_type;
+          await existingVote.save({ transaction });
+          voteChange[oldType === "upvote" ? "upvotes" : "downvotes"] = -1;
+          voteChange[vote_type === "upvote" ? "upvotes" : "downvotes"] = 1;
+        }
+      } else {
+        await UserVote.create(
+          {
+            user_id: req.user.id,
+            target_type: "reply",
+            target_id: replyId,
+            vote_type,
+          },
+          { transaction }
+        );
+        voteChange[vote_type === "upvote" ? "upvotes" : "downvotes"] = 1;
+      }
+
+      await reply.increment(voteChange, { transaction });
+      await transaction.commit();
+
+      // Reload counts
+      const updated = await DiscussionReply.findByPk(replyId, {
+        attributes: ["upvotes", "downvotes", "post_id"],
+      });
+
+      try {
+        const ws = getWebSocketService();
+        ws.broadcastReplyVote({
+          replyId,
+          postId: postId || (updated as any)?.post_id,
+          userId: req.user.id,
+          voteType: finalUserVote,
+          upvotes: updated?.upvotes || 0,
+          downvotes: updated?.downvotes || 0,
+        });
+
+        if (finalUserVote) {
+          await notificationService.notifyReplyVote(
+            replyId,
+            req.user.id,
+            finalUserVote
+          );
+        }
+      } catch (e) {
+        console.error("WebSocket/notification error (reply:vote):", e);
+      }
+
+      res.json({
+        success: true,
+        data: {
+          upvotes: updated?.upvotes || 0,
+          downvotes: updated?.downvotes || 0,
+          userVote: finalUserVote,
+        },
+      });
+    } catch (error) {
+      await transaction.rollback();
+      console.error("Error voting on reply:", error);
+      res
+        .status(500)
+        .json({ success: false, error: "Failed to vote on reply" });
     }
   }
 
@@ -1400,11 +1773,12 @@ class DiscussionController {
       const { id: postId } = req.params;
       const { content, parent_reply_id }: CreateReplyRequest = req.body;
 
-      // Validation
-      if (!content || content.length < 10 || content.length > 2000) {
+      // Validation (relaxed): require at least one non-whitespace character
+      const trimmedContent = (content || "").trim();
+      if (!trimmedContent) {
         res.status(400).json({
           success: false,
-          error: "Reply content must be between 10 and 2,000 characters",
+          error: "Reply content is required",
         });
         return;
       }
@@ -1445,13 +1819,19 @@ class DiscussionController {
       // Create the reply
       const reply = await DiscussionReply.create(
         {
-          content,
+          content: trimmedContent,
           post_id: postId,
           author_id: req.user.id,
           parent_reply_id: parent_reply_id || undefined,
           depth,
         },
         { transaction }
+      );
+
+      // Increment the post's replies_count
+      await DiscussionPost.increment(
+        { replies_count: 1 },
+        { where: { id: postId }, transaction }
       );
 
       await transaction.commit();

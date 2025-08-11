@@ -39,6 +39,25 @@ const voteValidation = [
     .withMessage('vote_type must be either "upvote" or "downvote"'),
 ];
 
+const updatePostValidation = [
+  body("title")
+    .optional()
+    .isLength({ min: 10, max: 255 })
+    .withMessage("Title must be between 10 and 255 characters"),
+  body("content")
+    .optional()
+    .isLength({ min: 20, max: 10000 })
+    .withMessage("Content must be between 20 and 10,000 characters"),
+  body("tags")
+    .optional()
+    .isArray({ max: 3 })
+    .withMessage("tags must be an array with up to 3 items"),
+  body("is_available")
+    .optional()
+    .isBoolean()
+    .withMessage("is_available must be a boolean"),
+];
+
 const createReplyValidation = [
   body("content")
     .isLength({ min: 10, max: 2000 })
@@ -182,6 +201,21 @@ router.post(
 );
 
 /**
+ * @route   POST /api/discussions/replies/:id/vote
+ * @desc    Vote on a reply (upvote/downvote)
+ * @access  Private (authenticated users only)
+ */
+router.post(
+  "/replies/:id/vote",
+  authenticateWithCookies,
+  csrfProtection,
+  uuidValidation,
+  voteValidation,
+  handleValidationErrors,
+  discussionController.voteReply
+);
+
+/**
  * @route   GET /api/discussions/posts/:id/replies
  * @desc    Get replies for a specific post
  * @access  Public (but shows more data if authenticated)
@@ -207,6 +241,21 @@ router.post(
   createReplyValidation,
   handleValidationErrors,
   discussionController.createReply
+);
+
+/**
+ * @route   PATCH /api/discussions/posts/:id
+ * @desc    Update a post (owner-only). Supports updating title, content, tags, is_available
+ * @access  Private (authenticated users only)
+ */
+router.patch(
+  "/posts/:id",
+  authenticateWithCookies,
+  csrfProtection,
+  uuidValidation,
+  updatePostValidation,
+  handleValidationErrors,
+  discussionController.updatePost
 );
 
 /**
