@@ -14,6 +14,16 @@ import ContentReport from "../models/ContentReport";
 import User from "../models/User";
 import { StorageFactory } from "../services/storage/StorageFactory";
 import { MediaStorageService } from "../services/storage/MediaStorageInterface";
+import permissionService from "../services/permissionService";
+
+// Module-level singleton for storage to avoid losing `this` binding in Express handlers
+let __storageInstance: MediaStorageService | undefined;
+function getStorageInstance(): MediaStorageService {
+  if (!__storageInstance) {
+    __storageInstance = StorageFactory.createStorageService();
+  }
+  return __storageInstance;
+}
 
 // Request interfaces matching frontend expectations
 interface CreatePostRequest {
@@ -62,14 +72,6 @@ interface AuthenticatedRequest extends Request {
 }
 
 class DiscussionController {
-  private _storage?: MediaStorageService;
-
-  private getStorage(): MediaStorageService {
-    if (!this._storage) {
-      this._storage = StorageFactory.createStorageService();
-    }
-    return this._storage;
-  }
   /**
    * Get posts with pagination, search, and filtering (supports cursor-based infinite scroll)
    * GET /api/discussions/posts
@@ -937,7 +939,7 @@ class DiscussionController {
           return;
         }
 
-        const storage = this.getStorage();
+        const storage = getStorageInstance();
         for (let i = 0; i < files.length; i++) {
           const f = files[i];
           const mediaType = f.mimetype.startsWith("video/")
@@ -990,7 +992,7 @@ class DiscussionController {
 
       await transaction.commit();
 
-      // Fetch the created post with author info for broadcasting
+      // Fetch the created post with author + media + tags for broadcasting
       const createdPost = await DiscussionPost.findByPk(post.id, {
         include: [
           {
@@ -1003,6 +1005,19 @@ class DiscussionController {
             as: "tags",
             attributes: ["name"],
             through: { attributes: [] },
+          },
+          {
+            model: PostMedia,
+            as: "media",
+            attributes: [
+              "id",
+              "media_type",
+              "url",
+              "thumbnail_url",
+              "display_order",
+            ],
+            separate: true,
+            required: false,
           },
         ],
       });
@@ -1022,9 +1037,18 @@ class DiscussionController {
           },
           tags: postData.tags.map((tag: any) => tag.name),
           is_market_post: post.is_market_post,
+          is_available: post.is_available,
+          is_approved: post.is_approved,
           upvotes: 0,
           downvotes: 0,
           replies_count: 0,
+          media: (postData.media || []).map((m: any) => ({
+            id: m.id,
+            media_type: m.media_type,
+            url: m.url,
+            thumbnail_url: m.thumbnail_url,
+            display_order: m.display_order,
+          })),
           created_at: (post as any).createdAt.toISOString(),
         });
       } catch (wsError) {
@@ -1179,6 +1203,61 @@ class DiscussionController {
         success: false,
         error: "Failed to vote on post",
       });
+    }
+  }
+
+  /**
+   * Soft delete a post (author or users with moderation/manage privileges)
+   * DELETE /api/discussions/posts/:id
+   */
+  async deletePost(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!req.user) {
+        res
+          .status(401)
+          .json({ success: false, error: "Authentication required" });
+        return;
+      }
+
+      const { id: postId } = req.params as any;
+      const post = await DiscussionPost.findByPk(postId);
+      if (!post || post.is_deleted) {
+        res.status(404).json({ success: false, error: "Post not found" });
+        return;
+      }
+
+      // Authorization: author can delete; otherwise require elevated permissions
+      const isAuthor = post.author_id === req.user.id;
+      let hasElevated = false;
+      if (!isAuthor) {
+        const permsToCheck = ["MANAGE:POSTS", "MODERATE:POSTS", "DELETE:POSTS"];
+        const result = await permissionService.hasAnyPermission(
+          req.user.id,
+          permsToCheck
+        );
+        hasElevated = result.hasPermission;
+      }
+
+      if (!isAuthor && !hasElevated) {
+        res.status(403).json({ success: false, error: "Permission denied" });
+        return;
+      }
+
+      post.is_deleted = true;
+      await post.save();
+
+      // Broadcast deletion to clients
+      try {
+        const ws = getWebSocketService();
+        ws.broadcastPostDelete(post.id);
+      } catch (e) {
+        console.error("WebSocket broadcast delete error:", e);
+      }
+
+      res.json({ success: true, data: { id: post.id, deleted: true } });
+    } catch (error) {
+      console.error("Error deleting post:", error);
+      res.status(500).json({ success: false, error: "Failed to delete post" });
     }
   }
 
@@ -1611,7 +1690,7 @@ class DiscussionController {
         return;
       }
 
-      const storage = this.getStorage();
+      const storage = getStorageInstance();
       const created: any[] = [];
       for (let i = 0; i < files.length; i++) {
         const f = files[i];
@@ -1662,7 +1741,7 @@ class DiscussionController {
   async getMedia(req: AuthenticatedRequest, res: Response): Promise<void> {
     try {
       const { storageKey } = req.params as any;
-      const storage = this.getStorage();
+      const storage = getStorageInstance();
       const url = await storage.getUrl(storageKey);
       // Redirect to the actual storage URL
       res.redirect(url);
@@ -1682,7 +1761,7 @@ class DiscussionController {
   ): Promise<void> {
     try {
       const { storageKey } = req.params as any;
-      const storage = this.getStorage();
+      const storage = getStorageInstance();
       const url = await storage.generateThumbnail(storageKey);
       res.redirect(url);
     } catch (error) {

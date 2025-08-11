@@ -38,9 +38,17 @@ export class CloudinaryStorageService implements MediaStorageService {
         metadata.mediaType === "video"
           ? {
               ...baseOptions,
-              // For videos: use async processing and don't specify format
+              // For videos: also generate a poster frame eagerly in background
               eager_async: true,
-              eager: ["q_auto"], // Simple quality optimization
+              eager: [
+                {
+                  width: 300,
+                  height: 200,
+                  crop: "fill",
+                  format: "jpg",
+                  start_offset: this.getVideoThumbStartOffset(),
+                },
+              ],
             }
           : {
               ...baseOptions,
@@ -99,7 +107,20 @@ export class CloudinaryStorageService implements MediaStorageService {
   }
 
   async generateThumbnail(storageKey: string): Promise<string> {
-    return this.generateImageThumbnailUrl(storageKey);
+    // Determine resource type dynamically; try video first, then image
+    try {
+      await cloudinary.api.resource(storageKey, { resource_type: "video" });
+      return this.generateVideoThumbnailUrl(storageKey);
+    } catch (_) {
+      // Not a video (or not found as video), try image
+      try {
+        await cloudinary.api.resource(storageKey, { resource_type: "image" });
+        return this.generateImageThumbnailUrl(storageKey);
+      } catch (e) {
+        // Fallback to image-style URL to avoid throwing; caller may handle 404 later
+        return this.generateImageThumbnailUrl(storageKey);
+      }
+    }
   }
 
   private getFormatFromMimeType(mimeType: string): string | undefined {
@@ -129,8 +150,16 @@ export class CloudinaryStorageService implements MediaStorageService {
       width: 300,
       height: 200,
       crop: "fill",
-      start_offset: "auto",
+      start_offset: this.getVideoThumbStartOffset(),
       format: "jpg",
     });
+  }
+
+  // Allow overriding the video poster frame selection via env (e.g., "auto", "0", "2.5")
+  private getVideoThumbStartOffset(): string | number {
+    const env = process.env.CLOUDINARY_VIDEO_THUMB_OFFSET;
+    if (!env || env.trim() === "") return "auto"; // default smart selection
+    const n = Number(env);
+    return isNaN(n) ? env : n; // allow numeric seconds or explicit Cloudinary expressions
   }
 }

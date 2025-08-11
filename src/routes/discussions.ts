@@ -1,7 +1,10 @@
 import { Router } from "express";
 import discussionController from "../controllers/discussionController";
 import { authenticateToken } from "../middleware/auth";
-import { authenticateWithCookies } from "../middleware/cookieAuth";
+import {
+  authenticateWithCookies,
+  csrfProtection,
+} from "../middleware/cookieAuth";
 import { handleValidationErrors } from "../middleware/validation";
 import { uploadMedia } from "../middleware/upload";
 import { body, query, param } from "express-validator";
@@ -32,8 +35,8 @@ const createPostValidation = [
 
 const voteValidation = [
   body("vote_type")
-    .isIn(["up", "down"])
-    .withMessage('vote_type must be either "up" or "down"'),
+    .isIn(["upvote", "downvote"])
+    .withMessage('vote_type must be either "upvote" or "downvote"'),
 ];
 
 const createReplyValidation = [
@@ -155,7 +158,8 @@ router.get("/posts/stats", discussionController.getStats);
  */
 router.post(
   "/posts",
-  authenticateToken,
+  authenticateWithCookies,
+  csrfProtection,
   uploadMedia, // Always include media middleware (handles no files gracefully)
   createPostValidation,
   handleValidationErrors,
@@ -169,7 +173,8 @@ router.post(
  */
 router.post(
   "/posts/:id/vote",
-  authenticateToken,
+  authenticateWithCookies,
+  csrfProtection,
   uuidValidation,
   voteValidation,
   handleValidationErrors,
@@ -196,7 +201,8 @@ router.get(
  */
 router.post(
   "/posts/:id/replies",
-  authenticateToken,
+  authenticateWithCookies,
+  csrfProtection,
   uuidValidation,
   createReplyValidation,
   handleValidationErrors,
@@ -210,11 +216,26 @@ router.post(
  */
 router.post(
   "/posts/:id/media",
-  authenticateToken,
+  authenticateWithCookies,
+  csrfProtection,
   uuidValidation,
   handleValidationErrors,
   uploadMedia,
   discussionController.uploadMedia
+);
+
+/**
+ * @route   DELETE /api/discussions/posts/:id
+ * @desc    Soft delete a post (author or users with elevated permissions)
+ * @access  Private
+ */
+router.delete(
+  "/posts/:id",
+  authenticateWithCookies,
+  csrfProtection,
+  uuidValidation,
+  handleValidationErrors,
+  discussionController.deletePost
 );
 
 /**

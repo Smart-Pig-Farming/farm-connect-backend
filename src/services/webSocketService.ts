@@ -58,9 +58,20 @@ export interface PostCreateData {
   };
   tags: string[];
   is_market_post: boolean;
+  // Availability and moderation status
+  is_available: boolean;
+  is_approved: boolean;
   upvotes: number;
   downvotes: number;
   replies_count: number;
+  // Minimal media info for clients to render without refetching
+  media?: Array<{
+    id: string | number;
+    media_type: "image" | "video";
+    url: string;
+    thumbnail_url?: string;
+    display_order?: number;
+  }>;
   created_at: string;
 }
 
@@ -70,6 +81,16 @@ export interface PostUpdateData {
   content: string;
   tags: string[];
   is_market_post: boolean;
+  // Optional fields that may change during moderation or edits
+  is_available?: boolean;
+  is_approved?: boolean;
+  media?: Array<{
+    id: string | number;
+    media_type: "image" | "video";
+    url: string;
+    thumbnail_url?: string;
+    display_order?: number;
+  }>;
   updated_at: string;
 }
 
@@ -150,7 +171,10 @@ export class WebSocketService {
   constructor(httpServer: HttpServer) {
     this.io = new Server(httpServer, {
       cors: {
-        origin: process.env.CLIENT_URL || "http://localhost:3000",
+        origin:
+          process.env.FRONTEND_URL ||
+          process.env.CLIENT_URL ||
+          "http://localhost:5173",
         methods: ["GET", "POST"],
         credentials: true,
       },
@@ -165,9 +189,26 @@ export class WebSocketService {
     // Authentication middleware
     this.io.use(async (socket, next) => {
       try {
-        const token =
-          socket.handshake.auth.token ||
+        // Prefer explicit token in auth, then Authorization header, then accessToken cookie
+        let token =
+          (socket.handshake.auth && (socket.handshake.auth as any).token) ||
           socket.handshake.headers.authorization?.replace("Bearer ", "");
+
+        if (!token) {
+          const cookieHeader = socket.handshake.headers.cookie || "";
+          const cookies = Object.fromEntries(
+            cookieHeader
+              .split(/;\s*/)
+              .filter(Boolean)
+              .map((c) => {
+                const idx = c.indexOf("=");
+                const k = decodeURIComponent(c.slice(0, idx));
+                const v = decodeURIComponent(c.slice(idx + 1));
+                return [k, v];
+              })
+          );
+          token = cookies["accessToken"]; // httpOnly cookies aren't accessible in browser JS; this works for server-initiated connections
+        }
 
         if (!token) {
           throw new Error("No authentication token provided");

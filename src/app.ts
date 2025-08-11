@@ -5,6 +5,8 @@ import morgan from "morgan";
 import cookieParser from "cookie-parser";
 import dotenv from "dotenv";
 import { testConnection } from "./config/database";
+import { createServer, Server as HttpServer } from "http";
+import { initializeWebSocket } from "./services/webSocketService";
 import { runBasicSeeds } from "./seeders/basicSeeds";
 import { runPermissionSeeds } from "./seeders/permissionSeeds";
 import sequelize from "./config/database";
@@ -22,16 +24,25 @@ import discussionRoutes from "./routes/discussions";
 
 class App {
   public app: Application;
+  private server: HttpServer;
   private port: string | number;
 
   constructor() {
     this.app = express();
     this.port = process.env.PORT || 3000;
+    this.server = createServer(this.app);
 
     this.initializeDatabase();
     this.initializeMiddlewares();
     this.initializeRoutes();
     this.initializeErrorHandling();
+    // Initialize WebSocket after middlewares/routes
+    try {
+      initializeWebSocket(this.server);
+      console.log("WebSocket initialized");
+    } catch (e) {
+      console.error("Failed to initialize WebSocket:", e);
+    }
   }
 
   private async initializeDatabase(): Promise<void> {
@@ -139,10 +150,10 @@ class App {
   }
 
   public listen(): void {
-    this.app.listen(this.port, () => {
-      console.log(` Farm Connect Backend running on port ${this.port}`);
-      console.log(` Environment: ${process.env.NODE_ENV || "development"}`);
-      console.log(` Access at: http://localhost:${this.port}`);
+    this.server.listen(this.port, () => {
+      console.log(`🚀 Farm Connect Backend running on port ${this.port}`);
+      console.log(`🌍 Environment: ${process.env.NODE_ENV || "development"}`);
+      console.log(`🔗 Access at: http://localhost:${this.port}`);
     });
   }
 }
