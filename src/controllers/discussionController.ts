@@ -409,6 +409,399 @@ class DiscussionController {
   }
 
   /**
+   * Get posts created by the authenticated user with pagination and filtering
+   * GET /api/discussions/my-posts
+   */
+  async getMyPosts(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!req.user) {
+        res.status(401).json({
+          success: false,
+          error: "Authentication required",
+        });
+        return;
+      }
+
+      const {
+        page = 1,
+        limit = 10,
+        search = "",
+        tag = "",
+        sort = "recent",
+        is_market_post,
+        cursor, // For infinite scroll
+        include_unapproved = true, // Default to true for user's own posts
+      } = req.query;
+
+      const limitNum = Number(limit);
+      const pageNum = Number(page);
+      // Use cursor-based pagination if cursor parameter is present (even if empty)
+      const useCursor = req.query.hasOwnProperty("cursor");
+
+      // Build where conditions - always filter by authenticated user
+      const whereConditions: any = {
+        is_deleted: false,
+        author_id: req.user.id, // Filter by authenticated user
+      };
+
+      // Add cursor-based pagination for infinite scroll
+      if (cursor && typeof cursor === "string" && cursor.trim() !== "") {
+        whereConditions.created_at = {
+          [Op.lt]: new Date(cursor),
+        };
+      }
+
+      // Add search filter
+      if (search) {
+        whereConditions[Op.or] = [
+          { title: { [Op.iLike]: `%${search}%` } },
+          { content: { [Op.iLike]: `%${search}%` } },
+        ];
+      }
+
+      // Add market post filter
+      if (is_market_post !== undefined) {
+        whereConditions.is_market_post = is_market_post === "true";
+      }
+
+      // For user's own posts, include unapproved by default unless explicitly excluded
+      if (include_unapproved === "false") {
+        whereConditions.is_approved = true;
+      }
+
+      // Build order clause
+      let order: any[] = [];
+      switch (sort) {
+        case "popular":
+          order = [
+            [sequelize.literal("upvotes - downvotes"), "DESC"],
+            ["created_at", "DESC"],
+          ];
+          break;
+        case "replies":
+          order = [
+            ["replies_count", "DESC"],
+            ["created_at", "DESC"],
+          ];
+          break;
+        case "recent":
+        default:
+          order = [["created_at", "DESC"]];
+          break;
+      }
+
+      // Build include array (same as getPosts)
+      const include: any[] = [
+        {
+          model: User,
+          as: "author",
+          attributes: [
+            "id",
+            "firstname",
+            "lastname",
+            "email",
+            "organization",
+            "sector",
+            "points",
+            "is_verified",
+          ],
+          required: false,
+        },
+        {
+          model: PostMedia,
+          as: "media",
+          attributes: [
+            "id",
+            "media_type",
+            "storage_key",
+            "file_name",
+            "display_order",
+            "url",
+            "thumbnail_url",
+          ],
+          required: false,
+          separate: true,
+        },
+        {
+          model: Tag,
+          as: "tags",
+          attributes: ["id", "name", "color"],
+          required: !!(tag && tag !== "All"),
+          ...(tag && tag !== "All" ? { where: { name: tag } } : {}),
+          through: { attributes: [] },
+        },
+      ];
+
+      // Add user vote information
+      include.push({
+        model: UserVote,
+        as: "votes",
+        where: {
+          user_id: req.user.id,
+        },
+        required: false,
+        attributes: ["vote_type"],
+        separate: true,
+      });
+
+      // Determine pagination strategy
+      const offset = useCursor ? 0 : (pageNum - 1) * limitNum;
+      const actualLimit = useCursor ? limitNum + 1 : limitNum;
+
+      // Build count filters (for facets) - exclude tag and cursor filters
+      const countWhere: any = {
+        is_deleted: false,
+        author_id: req.user.id,
+      };
+      if (search) {
+        countWhere[Op.or] = [
+          { title: { [Op.iLike]: `%${search}%` } },
+          { content: { [Op.iLike]: `%${search}%` } },
+        ];
+      }
+      if (is_market_post !== undefined) {
+        countWhere.is_market_post = is_market_post === "true";
+      }
+      if (include_unapproved === "false") {
+        countWhere.is_approved = true;
+      }
+
+      // Fetch posts and counts in parallel
+      const [postsAndCount, tagCountsRaw, totalAll] = await Promise.all([
+        DiscussionPost.findAndCountAll({
+          where: whereConditions,
+          include,
+          order,
+          limit: actualLimit,
+          offset,
+          distinct: true,
+        }),
+        // Tag counts for user's posts
+        Tag.findAll({
+          attributes: [
+            "id",
+            "name",
+            "color",
+            [
+              sequelize.fn(
+                "COUNT",
+                sequelize.fn("DISTINCT", sequelize.col("posts.id"))
+              ),
+              "postCount",
+            ],
+          ],
+          include: [
+            {
+              model: DiscussionPost,
+              as: "posts",
+              attributes: [],
+              through: { attributes: [] },
+              required: false,
+              where: countWhere,
+            },
+          ],
+          group: ["Tag.id"],
+          order: [["name", "ASC"]],
+        }),
+        // Total count of user's posts
+        DiscussionPost.count({ where: countWhere, distinct: true, col: "id" }),
+      ]);
+
+      const { rows: posts, count: total } = postsAndCount;
+
+      // Handle cursor-based pagination results
+      let finalPosts = posts;
+      let hasNextPage = false;
+      let nextCursor = null;
+
+      if (useCursor && posts.length > limitNum) {
+        finalPosts = posts.slice(0, limitNum);
+        hasNextPage = true;
+        const _last: any = finalPosts[finalPosts.length - 1];
+        const _lastDate: any = _last?.createdAt || _last?.created_at;
+        nextCursor = _lastDate ? new Date(_lastDate).toISOString() : null;
+      } else if (useCursor) {
+        hasNextPage = false;
+      }
+
+      // Transform data (same as getPosts)
+      const transformedPosts = finalPosts.map((post: any) => {
+        const mediaItems = (post.media || []).map((m: any) => {
+          const storageKey = m.storage_key;
+          const absoluteUrl =
+            m.url || `/api/discussions/media/${encodeURIComponent(storageKey)}`;
+          const thumbUrl =
+            m.thumbnail_url ||
+            `/api/discussions/media/${encodeURIComponent(
+              storageKey
+            )}/thumbnail`;
+          return {
+            id: m.id,
+            media_type: m.media_type,
+            url: absoluteUrl,
+            thumbnail_url: thumbUrl,
+            original_filename: m.file_name,
+            file_size: Number(m.file_size || 0),
+            display_order: m.display_order || 0,
+          };
+        });
+
+        const images = mediaItems.filter((m: any) => m.media_type === "image");
+        const video =
+          mediaItems.find((m: any) => m.media_type === "video") || null;
+
+        const createdAtRaw: any =
+          (post as any).createdAt || (post as any).created_at;
+        return {
+          id: post.id,
+          title: post.title,
+          content: post.content,
+          author: {
+            id: post.author?.id ?? 0,
+            firstname: post.author?.firstname ?? "",
+            lastname: post.author?.lastname ?? "",
+            avatar: null,
+            level_id: 1,
+            points: (post.author?.points as number) || 0,
+            location: (post.author as any)?.district || "",
+          },
+          tags:
+            post.tags?.map((t: any) => ({
+              id: t.id,
+              name: t.name,
+              color: t.color,
+            })) || [],
+          upvotes: post.upvotes,
+          downvotes: post.downvotes,
+          userVote: post.votes?.[0]?.vote_type || null,
+          replies: post.replies_count ?? 0,
+          shares: 0,
+          isMarketPost: post.is_market_post,
+          isAvailable: post.is_available,
+          createdAt: DiscussionController.formatTimeAgo(createdAtRaw),
+          media: mediaItems,
+          images,
+          video,
+          isModeratorApproved: post.is_approved,
+        };
+      });
+
+      // Build response with appropriate pagination metadata
+      const responseData: any = {
+        posts: transformedPosts,
+      };
+
+      if (useCursor) {
+        responseData.pagination = {
+          hasNextPage,
+          nextCursor,
+          count: transformedPosts.length,
+        };
+      } else {
+        responseData.pagination = {
+          page: pageNum,
+          limit: limitNum,
+          total,
+          totalPages: Math.ceil(total / limitNum),
+          hasNextPage: pageNum * limitNum < total,
+        };
+      }
+
+      // Build facets for user's posts
+      const tagCounts = (tagCountsRaw as any[]).map((t) => ({
+        id: t.id,
+        name: t.name,
+        color: t.color,
+        count: Number(t.get ? t.get("postCount") : t.postCount) || 0,
+      }));
+
+      responseData.facets = {
+        totals: { all: totalAll as number },
+        tags: tagCounts,
+      };
+
+      res.json({
+        success: true,
+        data: responseData,
+      });
+    } catch (error) {
+      console.error("Error fetching user posts:", error);
+      res.status(500).json({
+        success: false,
+        error: "Failed to fetch user posts",
+      });
+    }
+  }
+
+  /**
+   * Get authenticated user's posts statistics (total posts, posts created today)
+   * GET /api/discussions/my-posts/stats
+   */
+  async getMyPostsStats(
+    req: AuthenticatedRequest,
+    res: Response
+  ): Promise<void> {
+    try {
+      if (!req.user) {
+        res.status(401).json({
+          success: false,
+          error: "Authentication required",
+        });
+        return;
+      }
+
+      const startOfToday = new Date();
+      startOfToday.setHours(0, 0, 0, 0);
+
+      // Count user's posts (both approved and pending) for totals and today's posts
+      const whereConditions = {
+        is_deleted: false,
+        author_id: req.user.id,
+      };
+
+      const [
+        totalMyPosts,
+        myPostsToday,
+        approvedPosts,
+        pendingPosts,
+        marketPosts,
+      ] = await Promise.all([
+        DiscussionPost.count({ where: whereConditions }),
+        DiscussionPost.count({
+          where: { ...whereConditions, created_at: { [Op.gte]: startOfToday } },
+        }),
+        DiscussionPost.count({
+          where: { ...whereConditions, is_approved: true },
+        }),
+        DiscussionPost.count({
+          where: { ...whereConditions, is_approved: false },
+        }),
+        DiscussionPost.count({
+          where: { ...whereConditions, is_market_post: true },
+        }),
+      ]);
+
+      res.json({
+        success: true,
+        data: {
+          totalMyPosts,
+          myPostsToday,
+          approvedPosts,
+          pendingPosts,
+          marketPosts,
+          regularPosts: totalMyPosts - marketPosts,
+        },
+      });
+    } catch (error) {
+      console.error("Error fetching user posts stats:", error);
+      res.status(500).json({
+        success: false,
+        error: "Failed to fetch user posts stats",
+      });
+    }
+  }
+
+  /**
    * Get basic posts statistics (total approved posts, posts created today)
    * GET /api/discussions/posts/stats
    */

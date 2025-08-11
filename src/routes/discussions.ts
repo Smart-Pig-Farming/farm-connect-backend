@@ -1,6 +1,7 @@
 import { Router } from "express";
 import discussionController from "../controllers/discussionController";
 import { authenticateToken } from "../middleware/auth";
+import { authenticateWithCookies } from "../middleware/cookieAuth";
 import { handleValidationErrors } from "../middleware/validation";
 import { uploadMedia } from "../middleware/upload";
 import { body, query, param } from "express-validator";
@@ -108,6 +109,30 @@ router.get(
   queryValidation,
   handleValidationErrors,
   discussionController.getPosts
+);
+
+/**
+ * @route   GET /api/discussions/my-posts
+ * @desc    Get posts created by the authenticated user
+ * @access  Private (authenticated users only)
+ */
+router.get(
+  "/my-posts",
+  authenticateWithCookies,
+  queryValidation,
+  handleValidationErrors,
+  discussionController.getMyPosts
+);
+
+/**
+ * @route   GET /api/discussions/my-posts/stats
+ * @desc    Get stats for authenticated user's posts (total, today, approved, pending, market)
+ * @access  Private (authenticated users only)
+ */
+router.get(
+  "/my-posts/stats",
+  authenticateWithCookies,
+  discussionController.getMyPostsStats
 );
 
 /**
