@@ -1235,7 +1235,15 @@ class DiscussionController {
         return;
       }
 
-      const { title, content, tags, is_available } = req.body as any;
+      const {
+        title,
+        content,
+        tags,
+        is_market_post,
+        is_available,
+        removedImages = [],
+        removedVideo = false,
+      } = req.body as any;
 
       // Apply field-level validations for provided fields (route also validates)
       if (typeof title !== "undefined") {
@@ -1260,7 +1268,22 @@ class DiscussionController {
         post.content = content;
       }
 
-      // Only allow is_available toggle; non-market posts are always available
+      // Market post toggle and availability rules
+      if (typeof is_market_post !== "undefined") {
+        if (typeof is_market_post !== "boolean") {
+          res
+            .status(400)
+            .json({ success: false, error: "is_market_post must be a boolean" });
+          return;
+        }
+        post.is_market_post = is_market_post;
+        // If switching to non-market, force available to true (non-market posts are always available)
+        if (!is_market_post) {
+          post.is_available = true;
+        }
+      }
+
+      // Only allow is_available toggle when it's a market post
       if (typeof is_available !== "undefined") {
         if (typeof is_available !== "boolean") {
           res
@@ -1274,6 +1297,144 @@ class DiscussionController {
       }
 
       await post.save({ transaction });
+
+      // Media update handling (optional): enforce XOR between images and video
+      const files = (req.files as Express.Multer.File[] | undefined) || [];
+      const hasUploads = files.length > 0;
+      // Track deletions to perform and storage keys for after-commit cleanup
+      const storageKeysToDelete: string[] = [];
+      if (
+        hasUploads ||
+        (Array.isArray(removedImages) && removedImages.length > 0) ||
+        removedVideo
+      ) {
+        // Fetch existing media to compute constraints
+        const existingMedia = await PostMedia.findAll({
+          where: { post_id: post.id },
+          transaction,
+        });
+        let existingImages = existingMedia.filter(
+          (m) => m.media_type === "image"
+        );
+        let existingVideos = existingMedia.filter(
+          (m) => m.media_type === "video"
+        );
+
+        // Apply removals first (DB rows inside transaction; physical delete after commit)
+        if (Array.isArray(removedImages) && removedImages.length > 0) {
+          const toRemove = existingImages.filter((m) =>
+            removedImages.includes(m.url || "")
+          );
+          for (const m of toRemove) {
+            if (m.storage_key) storageKeysToDelete.push(m.storage_key);
+            await PostMedia.destroy({ where: { id: m.id }, transaction });
+          }
+          existingImages = existingImages.filter(
+            (m) => !removedImages.includes(m.url || "")
+          );
+        }
+        if (removedVideo && existingVideos.length > 0) {
+          for (const m of existingVideos) {
+            if (m.storage_key) storageKeysToDelete.push(m.storage_key);
+            await PostMedia.destroy({ where: { id: m.id }, transaction });
+          }
+          existingVideos = [];
+        }
+
+        // Compute media after deletions from adjusted arrays
+        const imagesAfter = existingImages;
+        const videosAfter = existingVideos;
+
+        // Enforce XOR with uploaded files
+        if (files.length > 0) {
+          const uploadsContainVideo = files.some((f) =>
+            f.mimetype.startsWith("video/")
+          );
+          const uploadsContainImage = files.some((f) =>
+            f.mimetype.startsWith("image/")
+          );
+          if (uploadsContainVideo && uploadsContainImage) {
+            await transaction.rollback();
+            res.status(400).json({
+              success: false,
+              error: "Cannot upload images and video in the same request",
+            });
+            return;
+          }
+          if (uploadsContainVideo) {
+            // Cannot have any images existing if uploading a video
+            if (imagesAfter.length > 0) {
+              await transaction.rollback();
+              res.status(400).json({
+                success: false,
+                error: "Post cannot contain both images and a video",
+              });
+              return;
+            }
+            if (files.length > 1) {
+              await transaction.rollback();
+              res.status(400).json({
+                success: false,
+                error: "Only one video file is allowed",
+              });
+              return;
+            }
+          } else if (uploadsContainImage) {
+            // Cannot have any video existing if uploading images
+            if (videosAfter.length > 0) {
+              await transaction.rollback();
+              res.status(400).json({
+                success: false,
+                error: "Post cannot contain both images and a video",
+              });
+              return;
+            }
+            // Max 4 images in total
+            const totalImages = imagesAfter.length + files.length;
+            if (totalImages > 4) {
+              await transaction.rollback();
+              res.status(400).json({
+                success: false,
+                error: "Maximum 4 images allowed per post",
+              });
+              return;
+            }
+          }
+
+          // Perform uploads
+          const storage = getStorageInstance();
+          const startIndex = imagesAfter.length; // maintain order after existing
+          for (let i = 0; i < files.length; i++) {
+            const f = files[i];
+            const mediaType = f.mimetype.startsWith("video/")
+              ? "video"
+              : ("image" as const);
+            const result = await storage.upload(f.buffer, {
+              postId: post.id,
+              mediaType,
+              fileName: f.originalname,
+              mimeType: f.mimetype,
+              fileSize: f.size,
+            });
+
+            await PostMedia.create(
+              {
+                post_id: post.id,
+                media_type: mediaType,
+                storage_key: result.storageKey,
+                url: result.url,
+                thumbnail_url: result.thumbnailUrl,
+                file_name: f.originalname,
+                file_size: f.size,
+                mime_type: f.mimetype,
+                display_order: mediaType === "image" ? startIndex + i : 0,
+                status: "ready",
+              },
+              { transaction }
+            );
+          }
+        }
+      }
 
       // Handle tags if provided
       if (typeof tags !== "undefined") {
@@ -1361,9 +1522,29 @@ class DiscussionController {
         console.error("WebSocket broadcast error (post:update):", wsError);
       }
 
+      // Best-effort storage deletion after commit
+      if (storageKeysToDelete.length > 0) {
+        const storage = getStorageInstance();
+        for (const key of storageKeysToDelete) {
+          try {
+            await storage.delete(key);
+          } catch (e) {
+            console.warn("Deferred storage delete failed for", key, e);
+          }
+        }
+      }
+
       res.json({ success: true, data: { id: post.id } });
     } catch (error) {
-      await transaction.rollback();
+      // Only rollback if not already finished
+      try {
+        // @ts-ignore - finished is internal but available in Sequelize
+        if (!transaction.finished) {
+          await transaction.rollback();
+        }
+      } catch (rollbackError) {
+        console.warn("Rollback skipped/failed:", rollbackError);
+      }
       console.error("Error updating post:", error);
       res.status(500).json({ success: false, error: "Failed to update post" });
     }

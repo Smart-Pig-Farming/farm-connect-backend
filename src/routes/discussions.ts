@@ -52,10 +52,23 @@ const updatePostValidation = [
     .optional()
     .isArray({ max: 3 })
     .withMessage("tags must be an array with up to 3 items"),
+  body("is_market_post")
+    .optional()
+    .isBoolean()
+    .withMessage("is_market_post must be a boolean"),
   body("is_available")
     .optional()
     .isBoolean()
     .withMessage("is_available must be a boolean"),
+  // Media update fields (optional)
+  body("removedImages")
+    .optional()
+    .isArray()
+    .withMessage("removedImages must be an array of URLs"),
+  body("removedVideo")
+    .optional()
+    .isBoolean()
+    .withMessage("removedVideo must be a boolean"),
 ];
 
 const createReplyValidation = [
@@ -253,6 +266,8 @@ router.patch(
   authenticateWithCookies,
   csrfProtection,
   uuidValidation,
+  // Allow optional media files to be sent with the PATCH request
+  uploadMedia,
   updatePostValidation,
   handleValidationErrors,
   discussionController.updatePost
