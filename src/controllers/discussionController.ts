@@ -1273,7 +1273,10 @@ class DiscussionController {
         if (typeof is_market_post !== "boolean") {
           res
             .status(400)
-            .json({ success: false, error: "is_market_post must be a boolean" });
+            .json({
+              success: false,
+              error: "is_market_post must be a boolean",
+            });
           return;
         }
         post.is_market_post = is_market_post;
