@@ -2,6 +2,9 @@ import { Router } from "express";
 import adminController from "../controllers/adminController";
 import { requirePermission } from "../middleware/permissions";
 import { authenticateWithCookies } from "../middleware/cookieAuth";
+import discussionModerationController from "../controllers/discussionModerationController";
+import { param, body } from "express-validator";
+import { handleValidationErrors } from "../middleware/validation";
 
 const router = Router();
 
@@ -176,6 +179,25 @@ router.get(
   "/users-stats",
   requirePermission("MANAGE:USERS"),
   adminController.getUserStats
+);
+
+// ***** DISCUSSION MODERATION ROUTES *****
+// Approve a discussion post
+router.patch(
+  "/discussions/posts/:id/approve",
+  requirePermission("MODERATE:POSTS"),
+  param("id").isUUID().withMessage("ID must be a valid UUID"),
+  handleValidationErrors,
+  discussionModerationController.approvePost
+);
+
+// Reject a discussion post
+router.patch(
+  "/discussions/posts/:id/reject",
+  requirePermission("MODERATE:POSTS"),
+  param("id").isUUID().withMessage("ID must be a valid UUID"),
+  handleValidationErrors,
+  discussionModerationController.rejectPost
 );
 
 export default router;

@@ -5,6 +5,8 @@ import morgan from "morgan";
 import cookieParser from "cookie-parser";
 import dotenv from "dotenv";
 import { testConnection } from "./config/database";
+import { createServer, Server as HttpServer } from "http";
+import { initializeWebSocket } from "./services/webSocketService";
 import { runBasicSeeds } from "./seeders/basicSeeds";
 import { runPermissionSeeds } from "./seeders/permissionSeeds";
 import sequelize from "./config/database";
@@ -18,29 +20,39 @@ import healthRoutes from "./routes/health";
 import authRoutes from "./routes/auth";
 import adminRoutes from "./routes/admin";
 import testRoutes from "./routes/test";
+import discussionRoutes from "./routes/discussions";
 
 class App {
   public app: Application;
+  private server: HttpServer;
   private port: string | number;
 
   constructor() {
     this.app = express();
     this.port = process.env.PORT || 3000;
+    this.server = createServer(this.app);
 
     this.initializeDatabase();
     this.initializeMiddlewares();
     this.initializeRoutes();
     this.initializeErrorHandling();
+    // Initialize WebSocket after middlewares/routes
+    try {
+      initializeWebSocket(this.server);
+      console.log("WebSocket initialized");
+    } catch (e) {
+      console.error("Failed to initialize WebSocket:", e);
+    }
   }
 
   private async initializeDatabase(): Promise<void> {
     try {
       await testConnection();
 
-      // Sync database models (create tables)
-      console.log("Syncing database models...");
-      await sequelize.sync({ force: false }); // Set to true to drop and recreate tables
-      console.log("Database models synced successfully");
+      // Authenticate database connection (don't sync since we use migrations)
+      console.log("Authenticating database connection...");
+      await sequelize.authenticate();
+      console.log("Database connection authenticated successfully");
 
       // Run basic seeds (roles and levels)
       await runBasicSeeds();
@@ -91,6 +103,9 @@ class App {
     // Admin routes
     this.app.use("/api/admin", adminRoutes);
 
+    // Discussion routes
+    this.app.use("/api/discussions", discussionRoutes);
+
     // Test routes (for development/testing)
     this.app.use("/api/test", testRoutes);
 
@@ -135,10 +150,10 @@ class App {
   }
 
   public listen(): void {
-    this.app.listen(this.port, () => {
-      console.log(` Farm Connect Backend running on port ${this.port}`);
-      console.log(` Environment: ${process.env.NODE_ENV || "development"}`);
-      console.log(` Access at: http://localhost:${this.port}`);
+    this.server.listen(this.port, () => {
+      console.log(`🚀 Farm Connect Backend running on port ${this.port}`);
+      console.log(`🌍 Environment: ${process.env.NODE_ENV || "development"}`);
+      console.log(`🔗 Access at: http://localhost:${this.port}`);
     });
   }
 }

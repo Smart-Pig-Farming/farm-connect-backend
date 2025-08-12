@@ -1,7 +1,7 @@
-import { DataTypes, Model, Optional, Association } from 'sequelize';
-import sequelize from '../config/database';
-import Role from './Role';
-import Permission from './Permission';
+import { DataTypes, Model, Optional, Association } from "sequelize";
+import sequelize from "../config/database";
+import Role from "./Role";
+import Permission from "./Permission";
 
 // RolePermission attributes interface
 export interface RolePermissionAttributes {
@@ -12,11 +12,14 @@ export interface RolePermissionAttributes {
 }
 
 // Creation attributes (id and assigned_at are auto-generated)
-interface RolePermissionCreationAttributes extends Optional<RolePermissionAttributes, 'id' | 'assigned_at'> {}
+interface RolePermissionCreationAttributes
+  extends Optional<RolePermissionAttributes, "id" | "assigned_at"> {}
 
 // RolePermission model class
-class RolePermission extends Model<RolePermissionAttributes, RolePermissionCreationAttributes> 
-  implements RolePermissionAttributes {
+class RolePermission
+  extends Model<RolePermissionAttributes, RolePermissionCreationAttributes>
+  implements RolePermissionAttributes
+{
   public id!: number;
   public role_id!: number;
   public permission_id!: number;
@@ -29,45 +32,48 @@ class RolePermission extends Model<RolePermissionAttributes, RolePermissionCreat
   };
 }
 
-RolePermission.init({
-  id: {
-    type: DataTypes.INTEGER,
-    autoIncrement: true,
-    primaryKey: true,
-  },
-  role_id: {
-    type: DataTypes.INTEGER,
-    allowNull: false,
-    references: {
-      model: Role,
-      key: 'id',
+RolePermission.init(
+  {
+    id: {
+      type: DataTypes.INTEGER,
+      autoIncrement: true,
+      primaryKey: true,
+    },
+    role_id: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      references: {
+        model: Role,
+        key: "id",
+      },
+    },
+    permission_id: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      references: {
+        model: Permission,
+        key: "id",
+      },
+    },
+    assigned_at: {
+      type: DataTypes.DATE,
+      defaultValue: DataTypes.NOW,
+      allowNull: false,
     },
   },
-  permission_id: {
-    type: DataTypes.INTEGER,
-    allowNull: false,
-    references: {
-      model: Permission,
-      key: 'id',
-    },
-  },
-  assigned_at: {
-    type: DataTypes.DATE,
-    defaultValue: DataTypes.NOW,
-    allowNull: false,
-  },
-}, {
-  sequelize,
-  modelName: 'RolePermission',
-  tableName: 'role_permissions',
-  timestamps: false,
-  underscored: true,
-  indexes: [
-    {
-      unique: true,
-      fields: ['role_id', 'permission_id'],
-    },
-  ],
-});
+  {
+    sequelize,
+    modelName: "RolePermission",
+    tableName: "role_permissions",
+    timestamps: false,
+    underscored: true,
+    indexes: [
+      {
+        unique: true,
+        fields: ["role_id", "permission_id"],
+      },
+    ],
+  }
+);
 
 export default RolePermission;

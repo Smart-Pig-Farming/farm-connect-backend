@@ -17,6 +17,12 @@ import BestPracticeContent from "./BestPracticeContent";
 import BestPracticeTag from "./BestPracticeTag";
 import Quiz from "./Quiz";
 import { PasswordResetToken } from "./PasswordResetToken";
+// Discussions system models
+import DiscussionPost from "./DiscussionPost";
+import DiscussionReply from "./DiscussionReply";
+import PostMedia from "./PostMedia";
+import Tag from "./Tag";
+import UserVote from "./UserVote";
 
 // ***** USER MANAGEMENT RELATIONSHIPS *****
 
@@ -174,6 +180,92 @@ BestPracticeTag.hasMany(Quiz, {
   as: "quizzes",
 });
 
+// ***** DISCUSSION SYSTEM RELATIONSHIPS *****
+
+// Post author
+DiscussionPost.belongsTo(User, { foreignKey: "author_id", as: "author" });
+User.hasMany(DiscussionPost, {
+  foreignKey: "author_id",
+  as: "discussionPosts",
+});
+
+// Post media
+DiscussionPost.hasMany(PostMedia, {
+  foreignKey: "post_id",
+  as: "media",
+  onDelete: "CASCADE",
+});
+PostMedia.belongsTo(DiscussionPost, { foreignKey: "post_id", as: "post" });
+
+// Post tags (many-to-many through post_tags)
+DiscussionPost.belongsToMany(Tag, {
+  through: {
+    model: "post_tags",
+    unique: false,
+  },
+  foreignKey: "post_id",
+  otherKey: "tag_id",
+  as: "tags",
+});
+Tag.belongsToMany(DiscussionPost, {
+  through: {
+    model: "post_tags",
+    unique: false,
+  },
+  foreignKey: "tag_id",
+  otherKey: "post_id",
+  as: "posts",
+});
+
+// Replies
+DiscussionPost.hasMany(DiscussionReply, {
+  foreignKey: "post_id",
+  as: "replies",
+  onDelete: "CASCADE",
+});
+DiscussionReply.belongsTo(DiscussionPost, { foreignKey: "post_id", as: "post" });
+
+// Reply author and hierarchy
+DiscussionReply.belongsTo(User, { foreignKey: "author_id", as: "author" });
+User.hasMany(DiscussionReply, {
+  foreignKey: "author_id",
+  as: "discussionReplies",
+});
+DiscussionReply.hasMany(DiscussionReply, {
+  foreignKey: "parent_reply_id",
+  as: "childReplies",
+});
+DiscussionReply.belongsTo(DiscussionReply, {
+  foreignKey: "parent_reply_id",
+  as: "parentReply",
+});
+
+// Votes (polymorphic-style by scope on target_type)
+User.hasMany(UserVote, { foreignKey: "user_id", as: "votes" });
+UserVote.belongsTo(User, { foreignKey: "user_id", as: "user" });
+DiscussionPost.hasMany(UserVote, {
+  foreignKey: "target_id",
+  constraints: false,
+  scope: { target_type: "post" },
+  as: "votes",
+});
+UserVote.belongsTo(DiscussionPost, {
+  foreignKey: "target_id",
+  constraints: false,
+  as: "post",
+});
+DiscussionReply.hasMany(UserVote, {
+  foreignKey: "target_id",
+  constraints: false,
+  scope: { target_type: "reply" },
+  as: "votes",
+});
+UserVote.belongsTo(DiscussionReply, {
+  foreignKey: "target_id",
+  constraints: false,
+  as: "reply",
+});
+
 // ***** DATABASE SYNC FUNCTION *****
 
 export const syncDatabase = async (force = false): Promise<void> => {
@@ -206,6 +298,11 @@ export {
   BestPracticeTag,
   Quiz,
   PasswordResetToken,
+  DiscussionPost,
+  DiscussionReply,
+  PostMedia,
+  Tag,
+  UserVote,
 };
 
 // Export the sequelize instance as default

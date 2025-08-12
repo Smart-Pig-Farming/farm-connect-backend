@@ -1,13 +1,13 @@
-import { DataTypes, Model, Optional, Association } from 'sequelize';
-import sequelize from '../config/database';
-import User from './User';
+import { DataTypes, Model, Optional, Association } from "sequelize";
+import sequelize from "../config/database";
+import User from "./User";
 
 // Enum for content types
 export enum ContentType {
-  POST = 'post',
-  COMMENT = 'comment',
-  ARTICLE = 'article',
-  DISCUSSION = 'discussion'
+  POST = "post",
+  COMMENT = "comment",
+  ARTICLE = "article",
+  DISCUSSION = "discussion",
 }
 
 // Content attributes interface
@@ -28,11 +28,17 @@ export interface ContentAttributes {
 }
 
 // Creation attributes (id is auto-generated)
-interface ContentCreationAttributes extends Optional<ContentAttributes, 'id' | 'is_approved' | 'is_deleted' | 'still_available'> {}
+interface ContentCreationAttributes
+  extends Optional<
+    ContentAttributes,
+    "id" | "is_approved" | "is_deleted" | "still_available"
+  > {}
 
 // Content model class
-class Content extends Model<ContentAttributes, ContentCreationAttributes> 
-  implements ContentAttributes {
+class Content
+  extends Model<ContentAttributes, ContentCreationAttributes>
+  implements ContentAttributes
+{
   public id!: number;
   public title!: string;
   public text_content!: string;
@@ -55,87 +61,90 @@ class Content extends Model<ContentAttributes, ContentCreationAttributes>
   };
 }
 
-Content.init({
-  id: {
-    type: DataTypes.INTEGER,
-    autoIncrement: true,
-    primaryKey: true,
-  },
-  title: {
-    type: DataTypes.STRING(255),
-    allowNull: false,
-  },
-  text_content: {
-    type: DataTypes.TEXT,
-    allowNull: false,
-  },
-  content_type: {
-    type: DataTypes.ENUM(...Object.values(ContentType)),
-    allowNull: false,
-    defaultValue: ContentType.POST,
-  },
-  is_approved: {
-    type: DataTypes.BOOLEAN,
-    defaultValue: false,
-    allowNull: false,
-  },
-  approved_at: {
-    type: DataTypes.DATE,
-    allowNull: true,
-  },
-  is_deleted: {
-    type: DataTypes.BOOLEAN,
-    defaultValue: false,
-    allowNull: false,
-  },
-  still_available: {
-    type: DataTypes.BOOLEAN,
-    defaultValue: true,
-    allowNull: false,
-  },
-  user_id: {
-    type: DataTypes.INTEGER,
-    allowNull: false,
-    references: {
-      model: User,
-      key: 'id',
+Content.init(
+  {
+    id: {
+      type: DataTypes.INTEGER,
+      autoIncrement: true,
+      primaryKey: true,
+    },
+    title: {
+      type: DataTypes.STRING(255),
+      allowNull: false,
+    },
+    text_content: {
+      type: DataTypes.TEXT,
+      allowNull: false,
+    },
+    content_type: {
+      type: DataTypes.ENUM(...Object.values(ContentType)),
+      allowNull: false,
+      defaultValue: ContentType.POST,
+    },
+    is_approved: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: false,
+      allowNull: false,
+    },
+    approved_at: {
+      type: DataTypes.DATE,
+      allowNull: true,
+    },
+    is_deleted: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: false,
+      allowNull: false,
+    },
+    still_available: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: true,
+      allowNull: false,
+    },
+    user_id: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      references: {
+        model: User,
+        key: "id",
+      },
+    },
+    parent_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+      references: {
+        model: "contents", // Self-reference
+        key: "id",
+      },
+    },
+    content_media_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
     },
   },
-  parent_id: {
-    type: DataTypes.INTEGER,
-    allowNull: true,
-    references: {
-      model: 'contents', // Self-reference
-      key: 'id',
-    },
-  },
-  content_media_id: {
-    type: DataTypes.INTEGER,
-    allowNull: true,
-  },
-}, {
-  sequelize,
-  modelName: 'Content',
-  tableName: 'contents',
-  timestamps: true,
-  underscored: true,
-  indexes: [
-    {
-      fields: ['user_id'],
-    },
-    {
-      fields: ['parent_id'],
-    },
-    {
-      fields: ['content_type'],
-    },
-    {
-      fields: ['is_approved', 'is_deleted', 'still_available'],
-    },
-    {
-      fields: ['created_at'],
-    },
-  ],
-});
+  {
+    sequelize,
+    modelName: "Content",
+    tableName: "contents",
+    timestamps: true,
+    underscored: true,
+    indexes: [
+      {
+        fields: ["user_id"],
+      },
+      {
+        fields: ["parent_id"],
+      },
+      {
+        fields: ["content_type"],
+      },
+      {
+        fields: ["is_approved", "is_deleted", "still_available"],
+      },
+      {
+        fields: ["created_at"],
+      },
+    ],
+  }
+);
 
 export default Content;

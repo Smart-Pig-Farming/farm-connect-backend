@@ -1,5 +1,5 @@
-import { DataTypes, Model, Optional } from 'sequelize';
-import sequelize from '../config/database';
+import { DataTypes, Model, Optional } from "sequelize";
+import sequelize from "../config/database";
 
 // BestPracticeTag attributes interface
 export interface BestPracticeTagAttributes {
@@ -12,11 +12,14 @@ export interface BestPracticeTagAttributes {
 }
 
 // Creation attributes (id is auto-generated)
-interface BestPracticeTagCreationAttributes extends Optional<BestPracticeTagAttributes, 'id'> {}
+interface BestPracticeTagCreationAttributes
+  extends Optional<BestPracticeTagAttributes, "id"> {}
 
 // BestPracticeTag model class
-class BestPracticeTag extends Model<BestPracticeTagAttributes, BestPracticeTagCreationAttributes> 
-  implements BestPracticeTagAttributes {
+class BestPracticeTag
+  extends Model<BestPracticeTagAttributes, BestPracticeTagCreationAttributes>
+  implements BestPracticeTagAttributes
+{
   public id!: number;
   public name!: string;
   public description!: string;
@@ -25,40 +28,43 @@ class BestPracticeTag extends Model<BestPracticeTagAttributes, BestPracticeTagCr
   public readonly updated_at!: Date;
 }
 
-BestPracticeTag.init({
-  id: {
-    type: DataTypes.INTEGER,
-    autoIncrement: true,
-    primaryKey: true,
-  },
-  name: {
-    type: DataTypes.STRING(100),
-    allowNull: false,
-    unique: true,
-  },
-  description: {
-    type: DataTypes.TEXT,
-    allowNull: false,
-  },
-  is_active: {
-    type: DataTypes.BOOLEAN,
-    defaultValue: true,
-    allowNull: false,
-  },
-}, {
-  sequelize,
-  modelName: 'BestPracticeTag',
-  tableName: 'best_practice_tags',
-  timestamps: true,
-  underscored: true,
-  indexes: [
-    {
-      fields: ['name'],
+BestPracticeTag.init(
+  {
+    id: {
+      type: DataTypes.INTEGER,
+      autoIncrement: true,
+      primaryKey: true,
     },
-    {
-      fields: ['is_active'],
+    name: {
+      type: DataTypes.STRING(100),
+      allowNull: false,
+      unique: true,
     },
-  ],
-});
+    description: {
+      type: DataTypes.TEXT,
+      allowNull: false,
+    },
+    is_active: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: true,
+      allowNull: false,
+    },
+  },
+  {
+    sequelize,
+    modelName: "BestPracticeTag",
+    tableName: "best_practice_tags",
+    timestamps: true,
+    underscored: true,
+    indexes: [
+      {
+        fields: ["name"],
+      },
+      {
+        fields: ["is_active"],
+      },
+    ],
+  }
+);
 
 export default BestPracticeTag;

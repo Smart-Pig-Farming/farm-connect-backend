@@ -1,15 +1,15 @@
-import { DataTypes, Model, Optional, Association } from 'sequelize';
-import sequelize from '../config/database';
-import Content from './Content';
-import User from './User';
+import { DataTypes, Model, Optional, Association } from "sequelize";
+import sequelize from "../config/database";
+import Content from "./Content";
+import User from "./User";
 
 // Enum for reaction types
 export enum ReactionType {
-  LIKE = 'like',
-  DISLIKE = 'dislike',
-  HELPFUL = 'helpful',
-  QUESTION = 'question',
-  LOVE = 'love'
+  LIKE = "like",
+  DISLIKE = "dislike",
+  HELPFUL = "helpful",
+  QUESTION = "question",
+  LOVE = "love",
 }
 
 // ContentReaction attributes interface
@@ -22,11 +22,14 @@ export interface ContentReactionAttributes {
 }
 
 // Creation attributes (id and created_at are auto-generated)
-interface ContentReactionCreationAttributes extends Optional<ContentReactionAttributes, 'id' | 'created_at'> {}
+interface ContentReactionCreationAttributes
+  extends Optional<ContentReactionAttributes, "id" | "created_at"> {}
 
 // ContentReaction model class
-class ContentReaction extends Model<ContentReactionAttributes, ContentReactionCreationAttributes> 
-  implements ContentReactionAttributes {
+class ContentReaction
+  extends Model<ContentReactionAttributes, ContentReactionCreationAttributes>
+  implements ContentReactionAttributes
+{
   public id!: number;
   public reaction_type!: ReactionType;
   public content_id!: number;
@@ -40,48 +43,51 @@ class ContentReaction extends Model<ContentReactionAttributes, ContentReactionCr
   };
 }
 
-ContentReaction.init({
-  id: {
-    type: DataTypes.INTEGER,
-    autoIncrement: true,
-    primaryKey: true,
-  },
-  reaction_type: {
-    type: DataTypes.ENUM(...Object.values(ReactionType)),
-    allowNull: false,
-  },
-  content_id: {
-    type: DataTypes.INTEGER,
-    allowNull: false,
-    references: {
-      model: Content,
-      key: 'id',
+ContentReaction.init(
+  {
+    id: {
+      type: DataTypes.INTEGER,
+      autoIncrement: true,
+      primaryKey: true,
+    },
+    reaction_type: {
+      type: DataTypes.ENUM(...Object.values(ReactionType)),
+      allowNull: false,
+    },
+    content_id: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      references: {
+        model: Content,
+        key: "id",
+      },
+    },
+    user_id: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      references: {
+        model: User,
+        key: "id",
+      },
     },
   },
-  user_id: {
-    type: DataTypes.INTEGER,
-    allowNull: false,
-    references: {
-      model: User,
-      key: 'id',
-    },
-  },
-}, {
-  sequelize,
-  modelName: 'ContentReaction',
-  tableName: 'content_reactions',
-  timestamps: true,
-  updatedAt: false, // Only track creation
-  underscored: true,
-  indexes: [
-    {
-      unique: true,
-      fields: ['content_id', 'user_id'], // One reaction per user per content
-    },
-    {
-      fields: ['reaction_type'],
-    },
-  ],
-});
+  {
+    sequelize,
+    modelName: "ContentReaction",
+    tableName: "content_reactions",
+    timestamps: true,
+    updatedAt: false, // Only track creation
+    underscored: true,
+    indexes: [
+      {
+        unique: true,
+        fields: ["content_id", "user_id"], // One reaction per user per content
+      },
+      {
+        fields: ["reaction_type"],
+      },
+    ],
+  }
+);
 
 export default ContentReaction;

@@ -1,5 +1,5 @@
-import { DataTypes, Model, Optional } from 'sequelize';
-import sequelize from '../config/database';
+import { DataTypes, Model, Optional } from "sequelize";
+import sequelize from "../config/database";
 
 // PostTag attributes interface
 export interface PostTagAttributes {
@@ -12,11 +12,13 @@ export interface PostTagAttributes {
 }
 
 // Creation attributes (id is auto-generated)
-interface PostTagCreationAttributes extends Optional<PostTagAttributes, 'id'> {}
+interface PostTagCreationAttributes extends Optional<PostTagAttributes, "id"> {}
 
 // PostTag model class
-class PostTag extends Model<PostTagAttributes, PostTagCreationAttributes> 
-  implements PostTagAttributes {
+class PostTag
+  extends Model<PostTagAttributes, PostTagCreationAttributes>
+  implements PostTagAttributes
+{
   public id!: number;
   public name!: string;
   public description!: string;
@@ -25,40 +27,43 @@ class PostTag extends Model<PostTagAttributes, PostTagCreationAttributes>
   public readonly updated_at!: Date;
 }
 
-PostTag.init({
-  id: {
-    type: DataTypes.INTEGER,
-    autoIncrement: true,
-    primaryKey: true,
-  },
-  name: {
-    type: DataTypes.STRING(100),
-    allowNull: false,
-    unique: true,
-  },
-  description: {
-    type: DataTypes.TEXT,
-    allowNull: false,
-  },
-  is_active: {
-    type: DataTypes.BOOLEAN,
-    defaultValue: true,
-    allowNull: false,
-  },
-}, {
-  sequelize,
-  modelName: 'PostTag',
-  tableName: 'post_tags',
-  timestamps: true,
-  underscored: true,
-  indexes: [
-    {
-      fields: ['name'],
+PostTag.init(
+  {
+    id: {
+      type: DataTypes.INTEGER,
+      autoIncrement: true,
+      primaryKey: true,
     },
-    {
-      fields: ['is_active'],
+    name: {
+      type: DataTypes.STRING(100),
+      allowNull: false,
+      unique: true,
     },
-  ],
-});
+    description: {
+      type: DataTypes.TEXT,
+      allowNull: false,
+    },
+    is_active: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: true,
+      allowNull: false,
+    },
+  },
+  {
+    sequelize,
+    modelName: "PostTag",
+    tableName: "post_tags",
+    timestamps: true,
+    underscored: true,
+    indexes: [
+      {
+        fields: ["name"],
+      },
+      {
+        fields: ["is_active"],
+      },
+    ],
+  }
+);
 
 export default PostTag;
