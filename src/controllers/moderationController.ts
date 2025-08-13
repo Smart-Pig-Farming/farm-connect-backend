@@ -16,6 +16,22 @@ const isValidDecision = (d: any): d is "retained" | "deleted" | "warned" =>
   d === "retained" || d === "deleted" || d === "warned";
 
 class ModerationController {
+  constructor() {
+    // Bind methods to ensure proper 'this' context
+    this.createReport = this.createReport.bind(this);
+    this.getPending = this.getPending.bind(this);
+    this.decide = this.decide.bind(this);
+    this.getHistory = this.getHistory.bind(this);
+    this.getMetrics = this.getMetrics.bind(this);
+    
+    // Bind private methods
+    this.reopenReport = this.reopenReport.bind(this);
+    this.broadcastReport = this.broadcastReport.bind(this);
+    this.notifyContentOwner = this.notifyContentOwner.bind(this);
+    this.createPostSnapshot = this.createPostSnapshot.bind(this);
+    this.sendEnhancedNotifications = this.sendEnhancedNotifications.bind(this);
+  }
+
   // Enhanced report creation with rate limiting and improved logic
   async createReport(req: Request, res: Response): Promise<void> {
     try {

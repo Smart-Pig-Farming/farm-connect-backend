@@ -22,6 +22,7 @@ import adminRoutes from "./routes/admin";
 import testRoutes from "./routes/test";
 import discussionRoutes from "./routes/discussions";
 import moderationRoutes from "./routes/moderation";
+import notificationRoutes from "./routes/notifications";
 
 class App {
   public app: Application;
@@ -109,6 +110,9 @@ class App {
 
     // Moderation routes
     this.app.use("/api/moderation", moderationRoutes);
+
+    // Notification routes
+    this.app.use("/api/notifications", notificationRoutes);
 
     // Test routes (for development/testing)
     this.app.use("/api/test", testRoutes);

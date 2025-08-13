@@ -27,6 +27,7 @@ import ContentReport from "./ContentReport";
 // Enhanced moderation models
 import PostSnapshot from "./PostSnapshot";
 import ReportRateLimit from "./ReportRateLimit";
+import Notification from "./Notification";
 
 // ***** USER MANAGEMENT RELATIONSHIPS *****
 
