@@ -106,16 +106,6 @@ router.get(
   moderationController.getHistory
 );
 
-// Metrics
-router.get(
-  "/metrics",
-  authenticateWithCookies,
-  requireAnyPermission([
-    "MANAGE:MODERATION",
-    "MODERATE:REPORTS",
-    "MODERATE:POSTS",
-  ]),
-  moderationController.getMetrics
-);
+// Metrics endpoint removed
 
 export default router;

@@ -22,7 +22,7 @@ class ModerationController {
     this.getPending = this.getPending.bind(this);
     this.decide = this.decide.bind(this);
     this.getHistory = this.getHistory.bind(this);
-    this.getMetrics = this.getMetrics.bind(this);
+  // this.getMetrics was removed
 
     // Bind private methods
     this.reopenReport = this.reopenReport.bind(this);
@@ -647,12 +647,23 @@ class ModerationController {
         new Set(reports.map((r: any) => r.reporter_id))
       );
 
-      // Broadcast decision for dashboards
+      // Sanitize potential emoji content in strings before broadcasting/sending notifications
+      const emojiRegex = /[\u{1F300}-\u{1FAFF}\u{1F1E6}-\u{1F1FF}\u{1F600}-\u{1F64F}\u{1F680}-\u{1F6FF}\u{2600}-\u{27BF}]/gu;
+      const cleanJustification = (justification || "")
+        // Remove common emoji ranges
+        .replace(emojiRegex, "")
+        // Remove variation selectors and zero-width joiners
+        .replace(/[\uFE0F\u200D]/g, "");
+      const cleanPostTitle = String((post as any).title || "")
+        .replace(emojiRegex, "")
+        .replace(/[\uFE0F\u200D]/g, "");
+
+      // Broadcast decision for dashboards (no emojis)
       const ws = getWebSocketService();
       ws.broadcastModerationDecision({
         postId: postId,
         decision: decision as "retained" | "deleted" | "warned",
-        justification,
+        justification: cleanJustification,
         moderatorId,
         decidedAt: now.toISOString(),
         reportCount,
@@ -663,9 +674,9 @@ class ModerationController {
         reporterIds,
         (post as any).author.id,
         postId,
-        (post as any).title,
+        cleanPostTitle,
         decision as "retained" | "deleted" | "warned",
-        justification,
+        cleanJustification,
         moderatorId
       );
 
@@ -908,149 +919,7 @@ class ModerationController {
     }
   }
 
-  // Enhanced metrics endpoint
-  async getMetrics(req: Request, res: Response): Promise<void> {
-    try {
-      const thirtyDaysAgo = new Date();
-      thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-      const sevenDaysAgo = new Date();
-      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-
-      // Get all content reports for analysis
-      const rows = await ContentReport.findAll({
-        where: {
-          content_type: "post",
-          created_at: { [Op.gte]: thirtyDaysAgo },
-        },
-        attributes: [
-          "id",
-          "content_id",
-          "reporter_id",
-          "status",
-          "decision",
-          "created_at",
-          "resolved_at",
-        ],
-        order: [["created_at", "ASC"]],
-      });
-
-      // Compute metrics
-      const pendingCount = await ContentReport.count({
-        where: { content_type: "post", status: "pending" },
-      });
-
-      const decisionsLast7d = await ContentReport.count({
-        where: {
-          content_type: "post",
-          status: "resolved",
-          resolved_at: { [Op.gte]: sevenDaysAgo },
-        },
-      });
-
-      // Time to decision analysis
-      const timeToDecisionSeconds: number[] = [];
-      const decisionDistribution = { retained: 0, deleted: 0, warned: 0 };
-      const reportsPerPost = new Map<string, number>();
-      const reportsPerReporter = new Map<number, number>();
-
-      for (const r of rows as any[]) {
-        const key = r.content_id;
-        reportsPerPost.set(key, (reportsPerPost.get(key) || 0) + 1);
-        reportsPerReporter.set(
-          r.reporter_id,
-          (reportsPerReporter.get(r.reporter_id) || 0) + 1
-        );
-
-        if (r.status === "resolved" && r.resolved_at && r.created_at) {
-          const timeToDecision =
-            (new Date(r.resolved_at).getTime() -
-              new Date(r.created_at).getTime()) /
-            1000;
-          timeToDecisionSeconds.push(timeToDecision);
-
-          if (
-            r.decision &&
-            decisionDistribution[
-              r.decision as keyof typeof decisionDistribution
-            ] !== undefined
-          ) {
-            decisionDistribution[
-              r.decision as keyof typeof decisionDistribution
-            ]++;
-          }
-        }
-      }
-
-      // Calculate median time to decision
-      const sortedTimes = timeToDecisionSeconds.sort((a, b) => a - b);
-      const medianTimeToDecisionSec =
-        sortedTimes.length > 0
-          ? sortedTimes[Math.floor(sortedTimes.length / 2)]
-          : 0;
-
-      // Response accuracy (percentage of reports leading to action)
-      const totalResolvedReports = decisionsLast7d;
-      const actionableReports =
-        decisionDistribution.deleted + decisionDistribution.warned;
-      const reportAccuracy =
-        totalResolvedReports > 0
-          ? Math.round((actionableReports / totalResolvedReports) * 100)
-          : 0;
-
-      // Reopened cases analysis
-      const resolvedByPost = new Map<string, Date[]>();
-      for (const r of rows as any[]) {
-        if (r.status === "resolved" && r.resolved_at) {
-          const arr = resolvedByPost.get(r.content_id) || [];
-          arr.push(new Date(r.resolved_at));
-          resolvedByPost.set(r.content_id, arr);
-        }
-      }
-
-      let reopenedCasesWithin30Days = 0;
-      for (const [postId, dates] of resolvedByPost.entries()) {
-        const sortedDates = dates.sort((a, b) => a.getTime() - b.getTime());
-        if (sortedDates.length > 1) {
-          // Check if there were multiple decisions within 30 days
-          for (let i = 1; i < sortedDates.length; i++) {
-            const timeDiff =
-              sortedDates[i].getTime() - sortedDates[i - 1].getTime();
-            const daysDiff = timeDiff / (1000 * 60 * 60 * 24);
-            if (daysDiff <= 30) {
-              reopenedCasesWithin30Days++;
-              break;
-            }
-          }
-        }
-      }
-
-      res.json({
-        success: true,
-        data: {
-          pendingCount,
-          decisionsLast7d,
-          medianTimeToDecisionSec: Math.round(medianTimeToDecisionSec),
-          reportAccuracy,
-          reopenedCasesWithin30Days,
-          decisionDistribution,
-          avgReportsPerPost:
-            reportsPerPost.size > 0
-              ? Array.from(reportsPerPost.values()).reduce((a, b) => a + b, 0) /
-                reportsPerPost.size
-              : 0,
-          topReporters: Array.from(reportsPerReporter.entries())
-            .sort(([, a], [, b]) => b - a)
-            .slice(0, 5)
-            .map(([reporterId, count]) => ({ reporterId, reportCount: count })),
-        },
-      });
-    } catch (error) {
-      console.error("Error computing moderation metrics:", error);
-      res
-        .status(500)
-        .json({ success: false, error: "Failed to compute metrics" });
-    }
-  }
+  // Metrics endpoint removed
 }
 
 export default new ModerationController();
