@@ -23,7 +23,7 @@ class ModerationController {
     this.decide = this.decide.bind(this);
     this.getHistory = this.getHistory.bind(this);
     this.getMetrics = this.getMetrics.bind(this);
-    
+
     // Bind private methods
     this.reopenReport = this.reopenReport.bind(this);
     this.broadcastReport = this.broadcastReport.bind(this);
@@ -517,7 +517,7 @@ class ModerationController {
           {
             model: User,
             as: "author",
-            attributes: ["id", "firstname", "lastname", "location"],
+            attributes: ["id", "firstname", "lastname", "district", "province"],
           },
           {
             model: Tag,
@@ -623,7 +623,8 @@ class ModerationController {
     const authorData = {
       id: post.author.id,
       name: `${post.author.firstname} ${post.author.lastname}`,
-      location: post.author.location || undefined,
+      district: post.author.district || undefined,
+      province: post.author.province || undefined,
     };
 
     const mediaData =

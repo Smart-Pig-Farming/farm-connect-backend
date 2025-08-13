@@ -1,11 +1,19 @@
-import { DataTypes, Model, Optional } from 'sequelize';
-import sequelize from '../config/database';
-import User from './User';
+import { DataTypes, Model, Optional } from "sequelize";
+import sequelize from "../config/database";
+import User from "./User";
 
 export interface NotificationAttributes {
   id: string;
   user_id: number;
-  type: 'post_vote' | 'reply_created' | 'reply_vote' | 'post_approved' | 'mention' | 'post_reported' | 'moderation_decision_reporter' | 'moderation_decision_owner';
+  type:
+    | "post_vote"
+    | "reply_created"
+    | "reply_vote"
+    | "post_approved"
+    | "mention"
+    | "post_reported"
+    | "moderation_decision_reporter"
+    | "moderation_decision_owner";
   title: string;
   message: string;
   data: any; // JSON data
@@ -14,12 +22,27 @@ export interface NotificationAttributes {
   updated_at: Date;
 }
 
-interface NotificationCreationAttributes extends Optional<NotificationAttributes, 'id' | 'read' | 'created_at' | 'updated_at'> {}
+interface NotificationCreationAttributes
+  extends Optional<
+    NotificationAttributes,
+    "id" | "read" | "created_at" | "updated_at"
+  > {}
 
-class Notification extends Model<NotificationAttributes, NotificationCreationAttributes> implements NotificationAttributes {
+class Notification
+  extends Model<NotificationAttributes, NotificationCreationAttributes>
+  implements NotificationAttributes
+{
   public id!: string;
   public user_id!: number;
-  public type!: 'post_vote' | 'reply_created' | 'reply_vote' | 'post_approved' | 'mention' | 'post_reported' | 'moderation_decision_reporter' | 'moderation_decision_owner';
+  public type!:
+    | "post_vote"
+    | "reply_created"
+    | "reply_vote"
+    | "post_approved"
+    | "mention"
+    | "post_reported"
+    | "moderation_decision_reporter"
+    | "moderation_decision_owner";
   public title!: string;
   public message!: string;
   public data!: any;
@@ -42,20 +65,20 @@ Notification.init(
       type: DataTypes.INTEGER,
       allowNull: false,
       references: {
-        model: 'users',
-        key: 'id',
+        model: "users",
+        key: "id",
       },
     },
     type: {
       type: DataTypes.ENUM(
-        'post_vote',
-        'reply_created', 
-        'reply_vote',
-        'post_approved',
-        'mention',
-        'post_reported',
-        'moderation_decision_reporter',
-        'moderation_decision_owner'
+        "post_vote",
+        "reply_created",
+        "reply_vote",
+        "post_approved",
+        "mention",
+        "post_reported",
+        "moderation_decision_reporter",
+        "moderation_decision_owner"
       ),
       allowNull: false,
     },
@@ -88,19 +111,19 @@ Notification.init(
   },
   {
     sequelize,
-    modelName: 'Notification',
-    tableName: 'notifications',
+    modelName: "Notification",
+    tableName: "notifications",
     timestamps: true,
     underscored: true,
     indexes: [
       {
-        fields: ['user_id', 'created_at'],
+        fields: ["user_id", "created_at"],
       },
       {
-        fields: ['user_id', 'read'],
+        fields: ["user_id", "read"],
       },
       {
-        fields: ['type'],
+        fields: ["type"],
       },
     ],
   }
@@ -108,8 +131,8 @@ Notification.init(
 
 // Define associations
 Notification.belongsTo(User, {
-  foreignKey: 'user_id',
-  as: 'user',
+  foreignKey: "user_id",
+  as: "user",
 });
 
 export default Notification;

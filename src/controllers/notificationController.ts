@@ -61,7 +61,9 @@ class NotificationController {
         return;
       }
 
-      const count = await notificationService.getUnreadNotificationCount(userId);
+      const count = await notificationService.getUnreadNotificationCount(
+        userId
+      );
 
       res.json({
         success: true,
@@ -96,7 +98,10 @@ class NotificationController {
         return;
       }
 
-      await notificationService.markNotificationsAsRead(userId, notificationIds);
+      await notificationService.markNotificationsAsRead(
+        userId,
+        notificationIds
+      );
 
       res.json({
         success: true,

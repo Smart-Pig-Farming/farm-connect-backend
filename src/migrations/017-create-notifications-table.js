@@ -21,7 +21,7 @@ module.exports = {
       type: {
         type: Sequelize.ENUM(
           "post_vote",
-          "reply_created", 
+          "reply_created",
           "reply_vote",
           "post_approved",
           "mention",
@@ -69,13 +69,16 @@ module.exports = {
 
   async down(queryInterface, Sequelize) {
     // Remove indexes first
-    await queryInterface.removeIndex("notifications", ["user_id", "created_at"]);
+    await queryInterface.removeIndex("notifications", [
+      "user_id",
+      "created_at",
+    ]);
     await queryInterface.removeIndex("notifications", ["user_id", "read"]);
     await queryInterface.removeIndex("notifications", ["type"]);
-    
+
     // Drop table
     await queryInterface.dropTable("notifications");
-    
+
     // Drop enum type for PostgreSQL
     try {
       await queryInterface.sequelize.query(
