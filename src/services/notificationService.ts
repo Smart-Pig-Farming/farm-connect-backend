@@ -1,4 +1,5 @@
 import { getWebSocketService, NotificationData } from "./webSocketService";
+import { randomUUID } from "crypto";
 import User from "../models/User";
 import DiscussionPost from "../models/DiscussionPost";
 import DiscussionReply from "../models/DiscussionReply";
@@ -51,8 +52,11 @@ class NotificationService {
         triggerUser
       );
 
+      // Use a proper UUID so it persists cleanly into the notifications table (UUID PK)
+      const notificationId = randomUUID();
+
       const notification: NotificationData = {
-        id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        id: notificationId,
         userId: payload.recipientId,
         type: payload.type,
         title: notificationContent.title,
@@ -536,7 +540,7 @@ class NotificationService {
   ): Promise<void> {
     try {
       await Notification.create({
-        id: notification.id,
+  id: notification.id, // already a UUID
         user_id: notification.userId,
         type: notification.type,
         title: notification.title,
