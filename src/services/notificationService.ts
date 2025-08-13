@@ -540,7 +540,7 @@ class NotificationService {
   ): Promise<void> {
     try {
       await Notification.create({
-  id: notification.id, // already a UUID
+        id: notification.id, // already a UUID
         user_id: notification.userId,
         type: notification.type,
         title: notification.title,

@@ -427,13 +427,43 @@ class ModerationController {
       });
       if (search) {
         const q = search.toLowerCase();
-        items = items.filter(
-          (it) =>
-            String(it.post.title).toLowerCase().includes(q) ||
-            String(it.post.author.firstname + " " + it.post.author.lastname)
-              .toLowerCase()
-              .includes(q)
-        );
+        items = items.filter((it) => {
+          const title = String(it.post.title || "").toLowerCase();
+          const author = String(
+            (it.post.author?.firstname || "") +
+              " " +
+              (it.post.author?.lastname || "")
+          )
+            .trim()
+            .toLowerCase();
+          const tagNames = Array.isArray(it.post.tags)
+            ? (it.post.tags as Array<{ name: string }>)
+                .map((t) => String(t.name || "").toLowerCase())
+                .join(" ")
+            : "";
+          const reasons = (it.reports || [])
+            .map((r: any) => String(r.reason || "").toLowerCase())
+            .join(" ");
+          const reporterNames = (it.reports || [])
+            .map((r: any) =>
+              String(
+                (
+                  (r.reporter?.firstname || "") +
+                  " " +
+                  (r.reporter?.lastname || "")
+                ).trim()
+              ).toLowerCase()
+            )
+            .join(" ");
+
+          return (
+            title.includes(q) ||
+            author.includes(q) ||
+            tagNames.includes(q) ||
+            reasons.includes(q) ||
+            reporterNames.includes(q)
+          );
+        });
       }
 
       // Summaries
@@ -459,13 +489,43 @@ class ModerationController {
       let filtered = summarized;
       if (search) {
         const q = search.toLowerCase();
-        filtered = summarized.filter(
-          (it) =>
-            String(it.post.title).toLowerCase().includes(q) ||
-            String(it.post.author.firstname + " " + it.post.author.lastname)
-              .toLowerCase()
-              .includes(q)
-        );
+        filtered = summarized.filter((it) => {
+          const title = String(it.post.title || "").toLowerCase();
+          const author = String(
+            (it.post.author?.firstname || "") +
+              " " +
+              (it.post.author?.lastname || "")
+          )
+            .trim()
+            .toLowerCase();
+          const tagNames = Array.isArray(it.post.tags)
+            ? (it.post.tags as Array<{ name: string }>)
+                .map((t) => String(t.name || "").toLowerCase())
+                .join(" ")
+            : "";
+          const reasons = (it.reports || [])
+            .map((r: any) => String(r.reason || "").toLowerCase())
+            .join(" ");
+          const reporterNames = (it.reports || [])
+            .map((r: any) =>
+              String(
+                (
+                  (r.reporter?.firstname || "") +
+                  " " +
+                  (r.reporter?.lastname || "")
+                ).trim()
+              ).toLowerCase()
+            )
+            .join(" ");
+
+          return (
+            title.includes(q) ||
+            author.includes(q) ||
+            tagNames.includes(q) ||
+            reasons.includes(q) ||
+            reporterNames.includes(q)
+          );
+        });
       }
 
       const total = filtered.length;
@@ -699,12 +759,14 @@ class ModerationController {
       const {
         from,
         to,
+        search,
         decision,
         page = "1",
         limit = "10",
       } = req.query as {
         from?: string;
         to?: string;
+        search?: string;
         decision?: "retained" | "deleted" | "warned";
         page?: string;
         limit?: string;
@@ -780,7 +842,7 @@ class ModerationController {
         groupedByPost.set(pid, arr);
       }
 
-      const history = Array.from(groupedByPost.entries()).map(
+      let history = Array.from(groupedByPost.entries()).map(
         ([postId, reportGroup]) => {
           const firstReport = reportGroup[0];
           return {
@@ -800,6 +862,27 @@ class ModerationController {
           };
         }
       );
+
+      // Optional text search across title, author name, moderator name, and justification
+      if (search && String(search).trim().length > 0) {
+        const q = String(search).toLowerCase();
+        history = history.filter((h: any) => {
+          const title = String(h.post?.title ?? "").toLowerCase();
+          const authorName = String(
+            [h.post?.author?.firstname, h.post?.author?.lastname]
+              .filter(Boolean)
+              .join(" ")
+          ).toLowerCase();
+          const moderatorName = String(h.moderator?.name ?? "").toLowerCase();
+          const justification = String(h.justification ?? "").toLowerCase();
+          return (
+            title.includes(q) ||
+            authorName.includes(q) ||
+            moderatorName.includes(q) ||
+            justification.includes(q)
+          );
+        });
+      }
 
       const total = history.length;
       const start = (pageNum - 1) * limitNum;
