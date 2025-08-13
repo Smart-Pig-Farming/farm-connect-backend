@@ -23,6 +23,10 @@ import DiscussionReply from "./DiscussionReply";
 import PostMedia from "./PostMedia";
 import Tag from "./Tag";
 import UserVote from "./UserVote";
+import ContentReport from "./ContentReport";
+// Enhanced moderation models
+import PostSnapshot from "./PostSnapshot";
+import ReportRateLimit from "./ReportRateLimit";
 
 // ***** USER MANAGEMENT RELATIONSHIPS *****
 
@@ -223,7 +227,10 @@ DiscussionPost.hasMany(DiscussionReply, {
   as: "replies",
   onDelete: "CASCADE",
 });
-DiscussionReply.belongsTo(DiscussionPost, { foreignKey: "post_id", as: "post" });
+DiscussionReply.belongsTo(DiscussionPost, {
+  foreignKey: "post_id",
+  as: "post",
+});
 
 // Reply author and hierarchy
 DiscussionReply.belongsTo(User, { foreignKey: "author_id", as: "author" });
@@ -266,6 +273,71 @@ UserVote.belongsTo(DiscussionReply, {
   as: "reply",
 });
 
+// ***** MODERATION / REPORTS RELATIONSHIPS *****
+
+// Reporter and moderator associations
+ContentReport.belongsTo(User, { foreignKey: "reporter_id", as: "reporter" });
+User.hasMany(ContentReport, { foreignKey: "reporter_id", as: "reports" });
+
+ContentReport.belongsTo(User, { foreignKey: "moderator_id", as: "moderator" });
+User.hasMany(ContentReport, {
+  foreignKey: "moderator_id",
+  as: "moderatedReports",
+});
+
+// Polymorphic-style: link to post or reply via content_id without constraints
+ContentReport.belongsTo(DiscussionPost, {
+  foreignKey: "content_id",
+  constraints: false,
+  as: "post",
+});
+DiscussionPost.hasMany(ContentReport, {
+  foreignKey: "content_id",
+  constraints: false,
+  as: "contentReports",
+});
+
+ContentReport.belongsTo(DiscussionReply, {
+  foreignKey: "content_id",
+  constraints: false,
+  as: "reply",
+});
+DiscussionReply.hasMany(ContentReport, {
+  foreignKey: "content_id",
+  constraints: false,
+  as: "contentReports",
+});
+
+// ***** POST SNAPSHOT RELATIONSHIPS *****
+
+// PostSnapshot belongs to ContentReport and DiscussionPost
+PostSnapshot.belongsTo(ContentReport, {
+  foreignKey: "content_report_id",
+  as: "contentReport",
+});
+ContentReport.hasOne(PostSnapshot, {
+  foreignKey: "content_report_id",
+  as: "postSnapshot",
+});
+
+PostSnapshot.belongsTo(DiscussionPost, {
+  foreignKey: "post_id",
+  as: "post",
+});
+DiscussionPost.hasMany(PostSnapshot, {
+  foreignKey: "post_id",
+  as: "snapshots",
+});
+
+// ***** REPORT RATE LIMIT RELATIONSHIPS *****
+
+// ReportRateLimit belongs to User
+ReportRateLimit.belongsTo(User, { foreignKey: "reporter_id", as: "reporter" });
+User.hasMany(ReportRateLimit, {
+  foreignKey: "reporter_id",
+  as: "reportRateLimits",
+});
+
 // ***** DATABASE SYNC FUNCTION *****
 
 export const syncDatabase = async (force = false): Promise<void> => {
@@ -303,6 +375,9 @@ export {
   PostMedia,
   Tag,
   UserVote,
+  ContentReport,
+  PostSnapshot,
+  ReportRateLimit,
 };
 
 // Export the sequelize instance as default

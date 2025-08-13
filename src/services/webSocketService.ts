@@ -44,6 +44,7 @@ export interface SocketEvents {
     contentId: string;
     contentType: "post" | "reply";
   }) => void;
+  "moderation:decision": (data: ModerationDecisionEvent) => void;
 }
 
 // Data interfaces
@@ -143,7 +144,9 @@ export interface NotificationData {
     | "reply_vote"
     | "post_approved"
     | "mention"
-    | "post_reported";
+    | "post_reported"
+    | "moderation_decision_reporter"
+    | "moderation_decision_owner";
   title: string;
   message: string;
   data: Record<string, any>;
@@ -158,6 +161,15 @@ export interface ContentReportData {
   details?: string;
   reporterId: number;
   created_at: string;
+}
+
+export interface ModerationDecisionEvent {
+  postId: string;
+  decision: "retained" | "deleted" | "warned";
+  justification: string;
+  moderatorId: number;
+  decidedAt: string;
+  reportCount: number;
 }
 
 // Connected users tracking
@@ -435,6 +447,15 @@ export class WebSocketService {
   ) {
     console.log("⚖️ Broadcasting content moderation:", contentId, action);
     this.io.emit(`moderation:content_${action}`, { contentId, contentType });
+  }
+
+  public broadcastModerationDecision(data: ModerationDecisionEvent) {
+    console.log(
+      "📡 Broadcasting moderation decision:",
+      data.postId,
+      data.decision
+    );
+    this.io.emit("moderation:decision", data);
   }
 
   // Utility methods

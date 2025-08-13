@@ -21,6 +21,7 @@ import authRoutes from "./routes/auth";
 import adminRoutes from "./routes/admin";
 import testRoutes from "./routes/test";
 import discussionRoutes from "./routes/discussions";
+import moderationRoutes from "./routes/moderation";
 
 class App {
   public app: Application;
@@ -105,6 +106,9 @@ class App {
 
     // Discussion routes
     this.app.use("/api/discussions", discussionRoutes);
+
+    // Moderation routes
+    this.app.use("/api/moderation", moderationRoutes);
 
     // Test routes (for development/testing)
     this.app.use("/api/test", testRoutes);

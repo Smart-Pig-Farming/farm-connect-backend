@@ -11,7 +11,9 @@ export interface NotificationPayload {
     | "reply_vote"
     | "post_approved"
     | "mention"
-    | "post_reported";
+    | "post_reported"
+    | "moderation_decision_reporter"
+    | "moderation_decision_owner";
   triggerUserId: number;
   data: {
     postId?: string;
@@ -20,6 +22,8 @@ export interface NotificationPayload {
     contentPreview?: string;
     voteType?: "upvote" | "downvote";
     reportReason?: string;
+    decision?: "retained" | "deleted" | "warned";
+    justification?: string;
   };
 }
 
@@ -132,6 +136,22 @@ class NotificationService {
         return {
           title: "Content reported",
           message: `Your post "${data.postTitle}" was reported for: ${data.reportReason}`,
+        };
+
+      case "moderation_decision_reporter":
+        return {
+          title: "Update on your report",
+          message: `Post "${data.postTitle}" decision: ${
+            data.decision
+          }. Reason: ${data.justification || "No additional details"}`,
+        };
+
+      case "moderation_decision_owner":
+        return {
+          title: "Moderation decision on your post",
+          message: `Your post "${data.postTitle}" was ${
+            data.decision
+          }. Reason: ${data.justification || "No additional details"}`,
         };
 
       default:

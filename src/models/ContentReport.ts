@@ -21,6 +21,7 @@ export interface ContentReportAttributes {
   status: "pending" | "resolved" | "dismissed";
   moderator_id?: number; // FK to User who handled the report
   resolution_notes?: string; // Moderator's notes on resolution
+  decision?: "retained" | "deleted" | "warned"; // Outcome of moderation decision for this report batch
   created_at?: Date;
   resolved_at?: Date;
 }
@@ -49,6 +50,7 @@ class ContentReport
   public status!: "pending" | "resolved" | "dismissed";
   public moderator_id?: number;
   public resolution_notes?: string;
+  public decision?: "retained" | "deleted" | "warned";
   public readonly created_at!: Date;
   public resolved_at?: Date;
 
@@ -107,6 +109,10 @@ ContentReport.init(
       defaultValue: "pending",
       allowNull: false,
     },
+    decision: {
+      type: DataTypes.ENUM("retained", "deleted", "warned"),
+      allowNull: true,
+    },
     moderator_id: {
       type: DataTypes.INTEGER,
       allowNull: true,
@@ -144,6 +150,9 @@ ContentReport.init(
       },
       {
         fields: ["reporter_id"],
+      },
+      {
+        fields: ["decision"],
       },
       {
         fields: ["moderator_id"],
