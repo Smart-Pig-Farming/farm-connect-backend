@@ -28,6 +28,9 @@ import ContentReport from "./ContentReport";
 import PostSnapshot from "./PostSnapshot";
 import ReportRateLimit from "./ReportRateLimit";
 import Notification from "./Notification";
+import ScoreEvent from "./ScoreEvent";
+import UserScoreTotal from "./UserScoreTotal";
+import ReplyAncestry from "./ReplyAncestry";
 
 // ***** USER MANAGEMENT RELATIONSHIPS *****
 
@@ -379,6 +382,9 @@ export {
   ContentReport,
   PostSnapshot,
   ReportRateLimit,
+  ScoreEvent,
+  UserScoreTotal,
+  ReplyAncestry,
 };
 
 // Export the sequelize instance as default

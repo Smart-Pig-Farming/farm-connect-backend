@@ -10,6 +10,7 @@ import PostSnapshot from "../models/PostSnapshot";
 import ReportRateLimit from "../models/ReportRateLimit";
 import { getWebSocketService } from "../services/webSocketService";
 import notificationService from "../services/notificationService";
+import scoringActionService from "../services/scoring/ScoringActionService";
 
 // Helper to parse decision input
 const isValidDecision = (d: any): d is "retained" | "deleted" | "warned" =>
@@ -22,7 +23,7 @@ class ModerationController {
     this.getPending = this.getPending.bind(this);
     this.decide = this.decide.bind(this);
     this.getHistory = this.getHistory.bind(this);
-  // this.getMetrics was removed
+    // this.getMetrics was removed
 
     // Bind private methods
     this.reopenReport = this.reopenReport.bind(this);
@@ -648,7 +649,8 @@ class ModerationController {
       );
 
       // Sanitize potential emoji content in strings before broadcasting/sending notifications
-      const emojiRegex = /[\u{1F300}-\u{1FAFF}\u{1F1E6}-\u{1F1FF}\u{1F600}-\u{1F64F}\u{1F680}-\u{1F6FF}\u{2600}-\u{27BF}]/gu;
+      const emojiRegex =
+        /[\u{1F300}-\u{1FAFF}\u{1F1E6}-\u{1F1FF}\u{1F600}-\u{1F64F}\u{1F680}-\u{1F6FF}\u{2600}-\u{27BF}]/gu;
       const cleanJustification = (justification || "")
         // Remove common emoji ranges
         .replace(emojiRegex, "")
@@ -679,6 +681,20 @@ class ModerationController {
         cleanJustification,
         moderatorId
       );
+
+      // Scoring: apply report resolution scoring (fire & forget)
+      try {
+        scoringActionService
+          .applyReportResolution({
+            decision,
+            post: post as any,
+            moderatorId,
+            reporterIds: reporterIds as number[],
+          })
+          .catch((e) => console.error("[scoring] report resolution failed", e));
+      } catch (e) {
+        console.error("[scoring] report resolution dispatch error", e);
+      }
 
       res.json({ success: true, data: { postId, decision, reportCount } });
     } catch (error) {

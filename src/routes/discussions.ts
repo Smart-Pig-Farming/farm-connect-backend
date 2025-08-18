@@ -73,8 +73,15 @@ const updatePostValidation = [
 
 const createReplyValidation = [
   body("content")
-    .isLength({ min: 10, max: 2000 })
-    .withMessage("Reply content must be between 10 and 2,000 characters"),
+    .custom((value) => {
+      if (!value || typeof value !== 'string' || value.trim().length === 0) {
+        throw new Error("Reply content cannot be empty or contain only whitespace");
+      }
+      if (value.length > 2000) {
+        throw new Error("Reply content must not exceed 2,000 characters");
+      }
+      return true;
+    }),
   body("parent_reply_id")
     .optional()
     .isUUID()

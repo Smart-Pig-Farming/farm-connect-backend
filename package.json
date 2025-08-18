@@ -9,7 +9,7 @@
     "build": "tsc",
     "build:watch": "tsc -w",
     "clean": "rm -rf dist",
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "jest --runInBand",
     "lint": "echo \"Linting not configured yet\"",
     "type-check": "tsc --noEmit",
     "db:migrate": "npx sequelize-cli db:migrate",
@@ -18,7 +18,8 @@
     "db:seed:undo": "npx sequelize-cli db:seed:undo:all",
     "seed:discussions": "ts-node src/scripts/seed_discussions.ts",
     "media:migrate": "ts-node src/scripts/migrate_media_to_cloudinary.ts",
-    "media:thumbs": "ts-node src/scripts/backfill_cloudinary_thumbnails.ts"
+    "media:thumbs": "ts-node src/scripts/backfill_cloudinary_thumbnails.ts",
+    "leaderboard:snapshot": "ts-node src/scripts/leaderboard_snapshot.ts"
   },
   "keywords": [
     "nodejs",
@@ -66,6 +67,11 @@
     "nodemon": "^3.1.10",
     "sequelize-cli": "^6.6.3",
     "ts-node": "^10.9.2",
-    "typescript": "^5.8.3"
+    "typescript": "^5.8.3",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.2.5",
+    "@types/jest": "^29.5.11",
+    "supertest": "^7.1.1",
+    "@types/supertest": "^2.0.16"
   }
 }

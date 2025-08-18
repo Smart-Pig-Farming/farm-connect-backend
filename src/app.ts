@@ -23,6 +23,7 @@ import testRoutes from "./routes/test";
 import discussionRoutes from "./routes/discussions";
 import moderationRoutes from "./routes/moderation";
 import notificationRoutes from "./routes/notifications";
+import scoreRoutes from "./routes/score";
 
 class App {
   public app: Application;
@@ -113,6 +114,9 @@ class App {
 
     // Notification routes
     this.app.use("/api/notifications", notificationRoutes);
+
+    // Scoring routes (phase 1 minimal)
+    this.app.use("/api/score", scoreRoutes);
 
     // Test routes (for development/testing)
     this.app.use("/api/test", testRoutes);

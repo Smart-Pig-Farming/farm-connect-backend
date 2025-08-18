@@ -13,6 +13,10 @@ import UserVote from "../models/UserVote";
 import ContentReport from "../models/ContentReport";
 import User from "../models/User";
 import { StorageFactory } from "../services/storage/StorageFactory";
+import scoringActionService from "../services/scoring/ScoringActionService";
+import UserScoreTotal from "../models/UserScoreTotal";
+import { fromScaled } from "../services/scoring/ScoreTypes";
+import { mapPointsToLevel } from "../services/scoring/LevelService";
 import { MediaStorageService } from "../services/storage/MediaStorageInterface";
 import permissionService from "../services/permissionService";
 
@@ -338,7 +342,7 @@ class DiscussionController {
             lastname: post.author?.lastname ?? "",
             avatar: null,
             level_id: 1,
-            points: (post.author?.points as number) || 0,
+            points: 0, // placeholder replaced later
             location: (post.author as any)?.district || "",
           },
           tags:
@@ -362,10 +366,34 @@ class DiscussionController {
         };
       });
 
+      // Resolve author score totals in batch
+      try {
+        const uniqueAuthorIds = Array.from(
+          new Set(
+            transformedPosts.map((p: any) => p.author.id).filter((id) => !!id)
+          )
+        );
+        if (uniqueAuthorIds.length) {
+          const totals = await UserScoreTotal.findAll({
+            where: { user_id: uniqueAuthorIds } as any,
+          });
+          const totalMap = new Map<number, number>();
+          for (const t of totals as any[]) {
+            totalMap.set(t.user_id, fromScaled(t.total_points));
+          }
+          for (const p of transformedPosts) {
+            const pts = totalMap.get(p.author.id) || 0;
+            p.author.points = pts;
+            // Derive dynamic level id from points
+            p.author.level_id = mapPointsToLevel(Math.floor(pts)).level;
+          }
+        }
+      } catch (e) {
+        console.error("[scoring] failed to hydrate author points", e);
+      }
+
       // Build response with appropriate pagination metadata
-      const responseData: any = {
-        posts: transformedPosts,
-      };
+      const responseData: any = { posts: transformedPosts };
 
       if (useCursor) {
         // Cursor-based pagination for infinite scroll
@@ -666,7 +694,7 @@ class DiscussionController {
             lastname: post.author?.lastname ?? "",
             avatar: null,
             level_id: 1,
-            points: (post.author?.points as number) || 0,
+            points: 0, // placeholder replaced later
             location: (post.author as any)?.district || "",
           },
           tags:
@@ -690,10 +718,35 @@ class DiscussionController {
         };
       });
 
+      // Hydrate author points
+      try {
+        const uniqueAuthorIds = Array.from(
+          new Set(
+            transformedPosts.map((p: any) => p.author.id).filter((id) => !!id)
+          )
+        );
+        if (uniqueAuthorIds.length) {
+          const totals = await UserScoreTotal.findAll({
+            where: { user_id: uniqueAuthorIds } as any,
+          });
+          const totalMap = new Map<number, number>();
+          for (const t of totals as any[])
+            totalMap.set(t.user_id, fromScaled(t.total_points));
+          for (const p of transformedPosts) {
+            const pts = totalMap.get(p.author.id) || 0;
+            p.author.points = pts;
+            p.author.level_id = mapPointsToLevel(Math.floor(pts)).level;
+          }
+        }
+      } catch (e) {
+        console.error(
+          "[scoring] failed to hydrate author points (user posts)",
+          e
+        );
+      }
+
       // Build response with appropriate pagination metadata
-      const responseData: any = {
-        posts: transformedPosts,
-      };
+      const responseData: any = { posts: transformedPosts };
 
       if (useCursor) {
         responseData.pagination = {
@@ -994,6 +1047,11 @@ class DiscussionController {
 
       await transaction.commit();
 
+      // Scoring: award post creation (fire-and-forget)
+      scoringActionService
+        .awardPostCreated(post.id, req.user.id)
+        .catch((e) => console.error("[scoring] post create failed", e));
+
       // Fetch the created post with author + media + tags for broadcasting
       const createdPost = await DiscussionPost.findByPk(post.id, {
         include: [
@@ -1158,13 +1216,29 @@ class DiscussionController {
 
       await transaction.commit();
 
+      // Determine final user vote after toggle/change
+      const finalUserVote =
+        existingVote && existingVote.vote_type === vote_type ? null : vote_type;
+
+      // Scoring integration for post vote (after finalUserVote computed)
+      try {
+        const previousVote: any = existingVote ? existingVote.vote_type : null;
+        scoringActionService
+          .handlePostVote({
+            actorId: req.user.id,
+            post,
+            previousVote,
+            newVote: finalUserVote,
+          })
+          .catch((e) => console.error("[scoring] post vote failed", e));
+      } catch (e) {
+        console.error("[scoring] post vote dispatch error", e);
+      }
+
       // Get updated post data
       const updatedPost = await DiscussionPost.findByPk(postId, {
         attributes: ["upvotes", "downvotes"],
       });
-
-      const finalUserVote =
-        existingVote && existingVote.vote_type === vote_type ? null : vote_type;
 
       // Emit WebSocket event for real-time vote updates
       try {
@@ -1271,12 +1345,10 @@ class DiscussionController {
       // Market post toggle and availability rules
       if (typeof is_market_post !== "undefined") {
         if (typeof is_market_post !== "boolean") {
-          res
-            .status(400)
-            .json({
-              success: false,
-              error: "is_market_post must be a boolean",
-            });
+          res.status(400).json({
+            success: false,
+            error: "is_market_post must be a boolean",
+          });
           return;
         }
         post.is_market_post = is_market_post;
@@ -1787,6 +1859,42 @@ class DiscussionController {
 
       const transformedReplies = replies.map(mapReply);
 
+      // Dynamic level computation for replies (top-level + nested up to depth 3)
+      try {
+        // Collect all unique author ids across all reply depths
+        const collectAuthorIds = (arr: any[]): number[] => {
+          const ids: number[] = [];
+            for (const r of arr) {
+              if (r.author?.id) ids.push(r.author.id);
+              if (Array.isArray(r.childReplies) && r.childReplies.length) {
+                ids.push(...collectAuthorIds(r.childReplies));
+              }
+            }
+          return ids;
+        };
+        const allAuthorIds = Array.from(new Set(collectAuthorIds(transformedReplies)));
+        if (allAuthorIds.length) {
+          const totals = await UserScoreTotal.findAll({ where: { user_id: allAuthorIds } as any });
+          const totalMap = new Map<number, number>();
+          for (const t of totals as any[]) totalMap.set(t.user_id, fromScaled(t.total_points));
+          const applyLevels = (arr: any[]) => {
+            for (const r of arr) {
+              const pts = totalMap.get(r.author?.id) || 0;
+              if (r.author) {
+                r.author.points = pts; // optional, may be unused by client
+                r.author.level_id = mapPointsToLevel(Math.floor(pts)).level;
+              }
+              if (Array.isArray(r.childReplies) && r.childReplies.length) {
+                applyLevels(r.childReplies);
+              }
+            }
+          };
+          applyLevels(transformedReplies);
+        }
+      } catch (e) {
+        console.error("[scoring] failed to hydrate reply author levels", e);
+      }
+
       res.json({
         success: true,
         data: {
@@ -1894,6 +2002,24 @@ class DiscussionController {
 
       await reply.increment(voteChange, { transaction });
       await transaction.commit();
+
+      // Scoring integration for reply vote (with trickle)
+      try {
+        const previousVote: any = existingVote ? existingVote.vote_type : null;
+        scoringActionService
+          .handleReplyVote({
+            actorId: req.user.id,
+            reply,
+            post:
+              (reply as any).post ||
+              (await DiscussionPost.findByPk(reply.post_id))!,
+            previousVote,
+            newVote: finalUserVote,
+          })
+          .catch((e) => console.error("[scoring] reply vote failed", e));
+      } catch (e) {
+        console.error("[scoring] reply vote dispatch error", e);
+      }
 
       // Reload counts
       const updated = await DiscussionReply.findByPk(replyId, {
@@ -2019,6 +2145,18 @@ class DiscussionController {
       );
 
       await transaction.commit();
+
+      // Scoring: award reply creation & parent reward
+      try {
+        const parentReply = parent_reply_id
+          ? await DiscussionReply.findByPk(parent_reply_id)
+          : null;
+        scoringActionService
+          .awardReplyCreated(reply, post, parentReply)
+          .catch((e) => console.error("[scoring] reply create failed", e));
+      } catch (e) {
+        console.error("[scoring] reply create scoring dispatch error", e);
+      }
 
       // Fetch the created reply with author info for broadcasting
       const createdReply = await DiscussionReply.findByPk(reply.id, {
@@ -2186,10 +2324,7 @@ class DiscussionController {
     return 1; // Amateur
   }
 
-  private getUserPoints(profile: any): number {
-    if (!profile) return 0;
-    return profile.posts_count * 2 + profile.upvotes_received * 1;
-  }
+  // Removed legacy getUserPoints; scoring now comes from user_score_totals
 
   private static formatTimeAgo(
     date: Date | string | number | null | undefined

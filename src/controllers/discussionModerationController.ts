@@ -4,6 +4,7 @@ import User from "../models/User";
 import Tag from "../models/Tag";
 import PostMedia from "../models/PostMedia";
 import { getWebSocketService } from "../services/webSocketService";
+import scoringActionService from "../services/scoring/ScoringActionService";
 import notificationService from "../services/notificationService";
 
 class DiscussionModerationController {
@@ -31,6 +32,14 @@ class DiscussionModerationController {
 
       // Notify author
       await notificationService.notifyPostApproved(post.id);
+
+      // Scoring: moderator approved bonus (await for consistency in tests)
+      try {
+        const moderatorId = (req as any).user?.userId || (req as any).user?.id;
+        await scoringActionService.awardModeratorApproval(post, moderatorId);
+      } catch (e) {
+        console.error("[scoring] mod approval bonus failed", e);
+      }
 
       // Load enriched data and broadcast update
       const enriched = await DiscussionPost.findByPk(post.id, {
@@ -106,16 +115,26 @@ class DiscussionModerationController {
         res.status(404).json({ success: false, error: "Post not found" });
         return;
       }
+      // Capture moderator ID up front
+      const moderatorId = (req as any).user?.userId || (req as any).user?.id;
 
-      if (!post.is_approved) {
-        res
-          .status(200)
-          .json({ success: true, data: { id: post.id, is_approved: false } });
-        return;
+      // Always attempt to reverse any prior approval bonus, even if the
+      // current is_approved flag is already false. This prevents a race where:
+      // 1. Approve request (sets bonus +15) is in-flight but not yet persisted.
+      // 2. User quickly triggers undo (reject) before is_approved flips to true.
+      // 3. Previous code early-returned (since is_approved still false) and skipped reversal.
+      // 4. Approve finishes; +15 persists with no reversal. (Observed bug)
+      // New logic: Always call reversal (idempotent inside service), then ensure flag is false.
+      try {
+        await scoringActionService.reverseModeratorApproval(post, moderatorId);
+      } catch (e) {
+        console.error("[scoring] mod approval reversal failed", e);
       }
 
-      post.is_approved = false;
-      await post.save();
+      if (post.is_approved) {
+        post.is_approved = false;
+        await post.save();
+      }
 
       // Load enriched data and broadcast update
       const enriched = await DiscussionPost.findByPk(post.id, {
