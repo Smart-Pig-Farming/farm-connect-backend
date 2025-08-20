@@ -72,16 +72,17 @@ const updatePostValidation = [
 ];
 
 const createReplyValidation = [
-  body("content")
-    .custom((value) => {
-      if (!value || typeof value !== 'string' || value.trim().length === 0) {
-        throw new Error("Reply content cannot be empty or contain only whitespace");
-      }
-      if (value.length > 2000) {
-        throw new Error("Reply content must not exceed 2,000 characters");
-      }
-      return true;
-    }),
+  body("content").custom((value) => {
+    if (!value || typeof value !== "string" || value.trim().length === 0) {
+      throw new Error(
+        "Reply content cannot be empty or contain only whitespace"
+      );
+    }
+    if (value.length > 2000) {
+      throw new Error("Reply content must not exceed 2,000 characters");
+    }
+    return true;
+  }),
   body("parent_reply_id")
     .optional()
     .isUUID()

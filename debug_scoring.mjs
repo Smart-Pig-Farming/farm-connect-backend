@@ -1,7 +1,6 @@
-import { QueryTypes } from "sequelize";
-import sequelize from "../config/database";
-import ScoreEvent from "../models/ScoreEvent";
-import UserScoreTotal from "../models/UserScoreTotal";
+import sequelize from "./src/config/database.js";
+import ScoreEvent from "./src/models/ScoreEvent.js";
+import UserScoreTotal from "./src/models/UserScoreTotal.js";
 
 async function debugScoring() {
   try {
@@ -18,7 +17,7 @@ async function debugScoring() {
     });
 
     console.log("\n=== Recent MOD_APPROVED_BONUS Events ===");
-    approvalEvents.forEach((event: any) => {
+    approvalEvents.forEach((event) => {
       console.log(
         `User: ${event.user_id}, Delta: ${event.delta}, PostID: ${event.ref_id}, Created: ${event.created_at}`
       );
@@ -34,14 +33,14 @@ async function debugScoring() {
     });
 
     console.log("\n=== Recent MOD_APPROVED_BONUS_REVERSAL Events ===");
-    reversalEvents.forEach((event: any) => {
+    reversalEvents.forEach((event) => {
       console.log(
         `User: ${event.user_id}, Delta: ${event.delta}, PostID: ${event.ref_id}, Created: ${event.created_at}`
       );
     });
 
     // Check if there are unbalanced approvals (approvals without reversals)
-    const unbalanced: any[] = await sequelize.query(
+    const unbalanced = await sequelize.query(
       `
       SELECT 
         a.ref_id as post_id,
@@ -62,14 +61,14 @@ async function debugScoring() {
       ORDER BY a.created_at DESC
       LIMIT 10
     `,
-      { type: QueryTypes.SELECT }
+      { type: sequelize.QueryTypes.SELECT }
     );
 
     console.log("\n=== Unbalanced Approvals (Net Delta != 0) ===");
     if (unbalanced.length === 0) {
       console.log("No unbalanced approvals found.");
     } else {
-      unbalanced.forEach((item: any) => {
+      unbalanced.forEach((item) => {
         console.log(
           `PostID: ${item.post_id}, User: ${item.user_id}, Approvals: ${item.approval_count}, Reversals: ${item.reversal_count}, Net Delta: ${item.net_delta}`
         );

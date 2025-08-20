@@ -15,7 +15,7 @@ import User from "../models/User";
 import { StorageFactory } from "../services/storage/StorageFactory";
 import scoringActionService from "../services/scoring/ScoringActionService";
 import UserScoreTotal from "../models/UserScoreTotal";
-import { fromScaled } from "../services/scoring/ScoreTypes";
+import { fromScaled } from "../services/scoring/ScoreTypes"; // for converting totals when returning authorPoints
 import { mapPointsToLevel } from "../services/scoring/LevelService";
 import { MediaStorageService } from "../services/storage/MediaStorageInterface";
 import permissionService from "../services/permissionService";
@@ -1220,19 +1220,28 @@ class DiscussionController {
       const finalUserVote =
         existingVote && existingVote.vote_type === vote_type ? null : vote_type;
 
-      // Scoring integration for post vote (after finalUserVote computed)
+      // Scoring integration now awaited so we can return fresh author points
+  let authorPoints: number | undefined = undefined;
+  let authorLevel: number | undefined = undefined;
       try {
         const previousVote: any = existingVote ? existingVote.vote_type : null;
-        scoringActionService
-          .handlePostVote({
-            actorId: req.user.id,
+        const scoringResult: any = await scoringActionService.handlePostVote({
+          actorId: req.user.id,
             post,
             previousVote,
             newVote: finalUserVote,
-          })
-          .catch((e) => console.error("[scoring] post vote failed", e));
+          });
+        // scoringResult.totals contains scaled totals; find author
+        if (scoringResult && Array.isArray(scoringResult.totals)) {
+          const authorId = (post as any).author_id;
+          const authorTotal = scoringResult.totals.find((t: any) => t.userId === authorId);
+          if (authorTotal) {
+            authorPoints = fromScaled(authorTotal.totalPoints);
+            authorLevel = mapPointsToLevel(Math.floor(authorPoints)).level;
+          }
+        }
       } catch (e) {
-        console.error("[scoring] post vote dispatch error", e);
+        console.error("[scoring] post vote processing error", e);
       }
 
       // Get updated post data
@@ -1270,6 +1279,8 @@ class DiscussionController {
           upvotes: updatedPost?.upvotes || 0,
           downvotes: updatedPost?.downvotes || 0,
           userVote: finalUserVote,
+          authorPoints: authorPoints,
+          authorLevel: authorLevel,
         },
       });
     } catch (error) {
@@ -1864,19 +1875,24 @@ class DiscussionController {
         // Collect all unique author ids across all reply depths
         const collectAuthorIds = (arr: any[]): number[] => {
           const ids: number[] = [];
-            for (const r of arr) {
-              if (r.author?.id) ids.push(r.author.id);
-              if (Array.isArray(r.childReplies) && r.childReplies.length) {
-                ids.push(...collectAuthorIds(r.childReplies));
-              }
+          for (const r of arr) {
+            if (r.author?.id) ids.push(r.author.id);
+            if (Array.isArray(r.childReplies) && r.childReplies.length) {
+              ids.push(...collectAuthorIds(r.childReplies));
             }
+          }
           return ids;
         };
-        const allAuthorIds = Array.from(new Set(collectAuthorIds(transformedReplies)));
+        const allAuthorIds = Array.from(
+          new Set(collectAuthorIds(transformedReplies))
+        );
         if (allAuthorIds.length) {
-          const totals = await UserScoreTotal.findAll({ where: { user_id: allAuthorIds } as any });
+          const totals = await UserScoreTotal.findAll({
+            where: { user_id: allAuthorIds } as any,
+          });
           const totalMap = new Map<number, number>();
-          for (const t of totals as any[]) totalMap.set(t.user_id, fromScaled(t.total_points));
+          for (const t of totals as any[])
+            totalMap.set(t.user_id, fromScaled(t.total_points));
           const applyLevels = (arr: any[]) => {
             for (const r of arr) {
               const pts = totalMap.get(r.author?.id) || 0;

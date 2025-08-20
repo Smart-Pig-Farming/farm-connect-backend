@@ -1,7 +1,78 @@
-import { QueryTypes } from "sequelize";
-import sequelize from "../config/database";
-import ScoreEvent from "../models/ScoreEvent";
-import UserScoreTotal from "../models/UserScoreTotal";
+const { Sequelize, DataTypes } = require("sequelize");
+
+// Database connection
+const sequelize = new Sequelize({
+  dialect: "sqlite",
+  storage: "./database.sqlite",
+  logging: console.log,
+});
+
+// ScoreEvent model
+const ScoreEvent = sequelize.define(
+  "ScoreEvent",
+  {
+    id: {
+      type: DataTypes.UUID,
+      defaultValue: Sequelize.UUIDV4,
+      primaryKey: true,
+    },
+    user_id: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+    },
+    actor_user_id: {
+      type: DataTypes.INTEGER,
+      allowNull: true,
+    },
+    event_type: {
+      type: DataTypes.STRING,
+      allowNull: false,
+    },
+    ref_type: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    ref_id: {
+      type: DataTypes.STRING,
+      allowNull: true,
+    },
+    delta: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+    },
+    meta: {
+      type: DataTypes.JSON,
+      allowNull: true,
+    },
+  },
+  {
+    tableName: "score_events",
+    timestamps: true,
+    underscored: true,
+  }
+);
+
+// UserScoreTotal model
+const UserScoreTotal = sequelize.define(
+  "UserScoreTotal",
+  {
+    user_id: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      primaryKey: true,
+    },
+    total_points: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 0,
+    },
+  },
+  {
+    tableName: "user_score_totals",
+    timestamps: true,
+    underscored: true,
+  }
+);
 
 async function debugScoring() {
   try {
@@ -18,7 +89,7 @@ async function debugScoring() {
     });
 
     console.log("\n=== Recent MOD_APPROVED_BONUS Events ===");
-    approvalEvents.forEach((event: any) => {
+    approvalEvents.forEach((event) => {
       console.log(
         `User: ${event.user_id}, Delta: ${event.delta}, PostID: ${event.ref_id}, Created: ${event.created_at}`
       );
@@ -34,14 +105,14 @@ async function debugScoring() {
     });
 
     console.log("\n=== Recent MOD_APPROVED_BONUS_REVERSAL Events ===");
-    reversalEvents.forEach((event: any) => {
+    reversalEvents.forEach((event) => {
       console.log(
         `User: ${event.user_id}, Delta: ${event.delta}, PostID: ${event.ref_id}, Created: ${event.created_at}`
       );
     });
 
     // Check if there are unbalanced approvals (approvals without reversals)
-    const unbalanced: any[] = await sequelize.query(
+    const unbalanced = await sequelize.query(
       `
       SELECT 
         a.ref_id as post_id,
@@ -58,18 +129,18 @@ async function debugScoring() {
         AND r.event_type = 'MOD_APPROVED_BONUS_REVERSAL'
       WHERE a.event_type = 'MOD_APPROVED_BONUS'
       GROUP BY a.ref_id, a.user_id
-      HAVING (SUM(a.delta) + COALESCE(SUM(r.delta), 0)) != 0
+      HAVING net_delta != 0
       ORDER BY a.created_at DESC
       LIMIT 10
     `,
-      { type: QueryTypes.SELECT }
+      { type: sequelize.QueryTypes.SELECT }
     );
 
     console.log("\n=== Unbalanced Approvals (Net Delta != 0) ===");
     if (unbalanced.length === 0) {
       console.log("No unbalanced approvals found.");
     } else {
-      unbalanced.forEach((item: any) => {
+      unbalanced.forEach((item) => {
         console.log(
           `PostID: ${item.post_id}, User: ${item.user_id}, Approvals: ${item.approval_count}, Reversals: ${item.reversal_count}, Net Delta: ${item.net_delta}`
         );
