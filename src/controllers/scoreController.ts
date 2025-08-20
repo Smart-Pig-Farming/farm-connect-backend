@@ -330,15 +330,13 @@ class ScoreController {
       const postsToday = await DiscussionPost.count({
         where: {
           author_id: userId,
+          is_deleted: false,
           created_at: { [Op.gte]: dayStart },
         },
       });
+      // Market opportunities: global count of all posts currently marked available (not restricted by author or date)
       const marketOpportunities = await DiscussionPost.count({
-        where: {
-          author_id: userId,
-          is_available: true,
-          created_at: { [Op.gte]: dayStart },
-        },
+        where: { is_available: true, is_deleted: false },
       });
       res.json({
         success: true,

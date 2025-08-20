@@ -61,10 +61,27 @@ module.exports = {
       },
     });
 
-    // Add indexes for performance
-    await queryInterface.addIndex("notifications", ["user_id", "created_at"]);
-    await queryInterface.addIndex("notifications", ["user_id", "read"]);
-    await queryInterface.addIndex("notifications", ["type"]);
+    // Add indexes for performance (idempotent)
+    const ensureIndex = async (name, sql) => {
+      await queryInterface.sequelize.query(`DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname='public' AND indexname='${name}') THEN
+          EXECUTE '${sql.replace(/'/g, "''")}';
+        END IF;
+      END$$;`);
+    };
+    await ensureIndex(
+      "notifications_user_id_created_at",
+      "CREATE INDEX notifications_user_id_created_at ON notifications(user_id, created_at)"
+    );
+    await ensureIndex(
+      "notifications_user_id_read",
+      "CREATE INDEX notifications_user_id_read ON notifications(user_id, read)"
+    );
+    await ensureIndex(
+      "notifications_type",
+      "CREATE INDEX notifications_type ON notifications(type)"
+    );
   },
 
   async down(queryInterface, Sequelize) {

@@ -37,71 +37,6 @@ function periodEnd(period: Period, startStr: string): Date {
 }
 
 class LeaderboardAggregationService {
-  async rebuild(period: Period, refDate = new Date()) {
-    if (period === "all") {
-      // No snapshot rebuild for all-time; derive dynamically
-      return 0;
-    }
-    const startStr = periodStart(period, refDate);
-    const end = periodEnd(period, startStr).toISOString();
-    const start = startStr + "T00:00:00.000Z";
-
-    // Delete existing rows for this period start
-    await sequelize.query(
-      `DELETE FROM user_score_leaderboards WHERE period = :period AND period_start = :startStr`,
-      { replacements: { period, startStr }, type: QueryTypes.BULKUPDATE }
-    );
-
-    // Aggregate points within window (delta already scaled)
-    const rows: any[] = await sequelize.query(
-      `SELECT user_id, COALESCE(SUM(delta),0) AS points
-       FROM score_events
-       WHERE created_at >= :start AND created_at < :end
-       GROUP BY user_id
-       ORDER BY points DESC
-       LIMIT 100`,
-      { replacements: { start, end }, type: QueryTypes.SELECT }
-    );
-
-    // Bulk insert
-    if (rows.length) {
-      const now = new Date().toISOString();
-      const values = rows
-        .map(
-          (r, i) =>
-            `('${period}','${startStr}',${r.user_id},${
-              r.points
-            },'${now}','${now}',${i + 1})`
-        )
-        .join(",");
-      // Support both with/without rank column (older schema)
-      try {
-        await sequelize.query(
-          `INSERT INTO user_score_leaderboards (period, period_start, user_id, points, created_at, updated_at, rank)
-           VALUES ${values}`
-        );
-      } catch (e) {
-        // fallback without rank
-        await sequelize.query(
-          `INSERT INTO user_score_leaderboards (period, period_start, user_id, points, created_at, updated_at)
-           VALUES ${values.replace(/,\d+\)$/g, ")")}`
-        );
-      }
-    }
-    return rows.length;
-  }
-
-  async rebuildAll(refDate = new Date()) {
-    const counts = {} as Record<Exclude<Period, "all">, number>;
-    for (const p of ["daily", "weekly", "monthly"] as Exclude<
-      Period,
-      "all"
-    >[]) {
-      counts[p] = await this.rebuild(p, refDate);
-    }
-    return counts;
-  }
-
   async get(period: Period, limit = 50, refDate = new Date()) {
     if (period === "all") {
       // Use total snapshot table + dynamic CASE mapping for level instead of relying on stale stored level_id
@@ -137,27 +72,31 @@ class LeaderboardAggregationService {
       }));
     }
     const startStr = periodStart(period, refDate);
+    const end = periodEnd(period, startStr).toISOString();
+    const start = startStr + "T00:00:00.000Z";
     const rows: any[] = await sequelize.query(
-      `SELECT l.user_id, u.username, u.firstname, u.lastname, u.district, u.province, u.sector,
-              COALESCE(l.points,0) AS period_scaled_points,
-              COALESCE(ust.total_points,0) AS total_scaled_points,
-              CASE
-                WHEN COALESCE(ust.total_points,0) BETWEEN 0 AND (20 * :scale) THEN 1
-                WHEN COALESCE(ust.total_points,0) BETWEEN (21 * :scale) AND (149 * :scale) THEN 2
-                WHEN COALESCE(ust.total_points,0) BETWEEN (150 * :scale) AND (299 * :scale) THEN 3
-                WHEN COALESCE(ust.total_points,0) BETWEEN (300 * :scale) AND (599 * :scale) THEN 4
-                WHEN COALESCE(ust.total_points,0) >= (600 * :scale) THEN 5
-                ELSE 1
-              END AS computed_level,
-              COALESCE(l.rank, ROW_NUMBER() OVER (ORDER BY l.points DESC)) AS rank
-       FROM user_score_leaderboards l
-       JOIN users u ON u.id = l.user_id
-       LEFT JOIN user_score_totals ust ON ust.user_id = l.user_id
-       WHERE l.period = :period AND l.period_start = :startStr
+      `WITH period_points AS (
+         SELECT se.user_id, COALESCE(SUM(se.delta),0) AS period_points
+         FROM score_events se
+         WHERE se.created_at >= :start AND se.created_at < :end
+         GROUP BY se.user_id
+       ), joined AS (
+         SELECT u.id AS user_id, u.username, u.firstname, u.lastname, u.district, u.province, u.sector,
+                COALESCE(pp.period_points,0) AS period_scaled_points,
+                COALESCE(ust.total_points,0) AS total_scaled_points
+         FROM users u
+         LEFT JOIN period_points pp ON pp.user_id = u.id
+         LEFT JOIN user_score_totals ust ON ust.user_id = u.id
+         WHERE pp.period_points IS NOT NULL -- only users with activity in window
+       ), ranked AS (
+         SELECT j.*, ROW_NUMBER() OVER (ORDER BY j.period_scaled_points DESC) AS rank
+         FROM joined j
+       )
+       SELECT * FROM ranked
        ORDER BY rank
        LIMIT :limit`,
       {
-        replacements: { period, startStr, limit, scale: POINT_SCALE },
+        replacements: { start, end, limit, scale: POINT_SCALE },
         type: QueryTypes.SELECT,
       }
     );
@@ -170,7 +109,14 @@ class LeaderboardAggregationService {
       district: r.district,
       province: r.province,
       sector: r.sector,
-      level_id: r.computed_level,
+      level_id: (() => {
+        const tp = Number(r.total_scaled_points) || 0;
+        if (tp <= 20 * POINT_SCALE) return 1;
+        if (tp <= 149 * POINT_SCALE) return 2;
+        if (tp <= 299 * POINT_SCALE) return 3;
+        if (tp <= 599 * POINT_SCALE) return 4;
+        return 5;
+      })(),
       points: Number(r.period_scaled_points) / POINT_SCALE,
       total_points: Number(r.total_scaled_points) / POINT_SCALE,
     }));
@@ -184,10 +130,13 @@ class LeaderboardAggregationService {
   ) {
     if (period === "all") {
       const rows: any[] = await sequelize.query(
-        `WITH user_points AS (
-               SELECT user_id, SUM(delta) AS points
-               FROM score_events
-               GROUP BY user_id
+        `-- NOTE: We intentionally JOIN users to exclude orphan score_events referencing deleted user IDs.
+         -- Otherwise ranks become inflated (e.g., single user seeing rank 11).
+         WITH user_points AS (
+               SELECT se.user_id, SUM(se.delta) AS points
+               FROM score_events se
+               JOIN users u ON u.id = se.user_id
+               GROUP BY se.user_id
              ), target AS (
                SELECT COALESCE((SELECT points FROM user_points WHERE user_id = :userId),0) AS points
              )
@@ -207,11 +156,13 @@ class LeaderboardAggregationService {
     const end = periodEnd(period, startStr).toISOString();
     const start = startStr + "T00:00:00.000Z";
     const rows: any[] = await sequelize.query(
-      `WITH user_points AS (
-         SELECT user_id, SUM(delta) AS points
-         FROM score_events
-         WHERE created_at >= :start AND created_at < :end
-         GROUP BY user_id
+      `-- Period-specific rank calculation excluding orphan events.
+       WITH user_points AS (
+         SELECT se.user_id, SUM(se.delta) AS points
+         FROM score_events se
+         JOIN users u ON u.id = se.user_id
+         WHERE se.created_at >= :start AND se.created_at < :end
+         GROUP BY se.user_id
        ), target AS (
          SELECT COALESCE((SELECT points FROM user_points WHERE user_id = :userId),0) AS points
        )

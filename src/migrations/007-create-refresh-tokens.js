@@ -70,12 +70,25 @@ module.exports = {
       },
     });
 
-    // Add indexes for performance
-    await queryInterface.addIndex("refresh_tokens", ["user_id"]);
-    await queryInterface.addIndex("refresh_tokens", ["token"]);
-    await queryInterface.addIndex("refresh_tokens", ["device_id"]);
-    await queryInterface.addIndex("refresh_tokens", ["expires_at"]);
-    await queryInterface.addIndex("refresh_tokens", ["is_revoked"]);
+    // Add indexes for performance (idempotent)
+    await queryInterface.sequelize.query(`DO $$
+    BEGIN
+      IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='refresh_tokens' AND column_name='user_id') THEN
+        EXECUTE 'CREATE INDEX IF NOT EXISTS refresh_tokens_user_id ON refresh_tokens (user_id)';
+      END IF;
+      IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='refresh_tokens' AND column_name='token') THEN
+        EXECUTE 'CREATE UNIQUE INDEX IF NOT EXISTS refresh_tokens_token ON refresh_tokens (token)';
+      END IF;
+      IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='refresh_tokens' AND column_name='device_id') THEN
+        EXECUTE 'CREATE INDEX IF NOT EXISTS refresh_tokens_device_id ON refresh_tokens (device_id)';
+      END IF;
+      IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='refresh_tokens' AND column_name='expires_at') THEN
+        EXECUTE 'CREATE INDEX IF NOT EXISTS refresh_tokens_expires_at ON refresh_tokens (expires_at)';
+      END IF;
+      IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='refresh_tokens' AND column_name='is_revoked') THEN
+        EXECUTE 'CREATE INDEX IF NOT EXISTS refresh_tokens_is_revoked ON refresh_tokens (is_revoked)';
+      END IF;
+    END$$;`);
   },
 
   async down(queryInterface, Sequelize) {

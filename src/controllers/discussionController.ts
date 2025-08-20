@@ -905,7 +905,7 @@ class DiscussionController {
         content,
         tags = [],
         is_market_post = false,
-        is_available = true,
+        is_available = false,
         media_files = [],
       }: CreatePostRequest = req.body;
 
@@ -941,7 +941,7 @@ class DiscussionController {
           content,
           author_id: req.user.id,
           is_market_post,
-          is_available: is_market_post ? is_available : true,
+          is_available: is_market_post ? is_available : false,
           is_approved: false, // Posts need moderation approval
         },
         { transaction }
@@ -1047,10 +1047,26 @@ class DiscussionController {
 
       await transaction.commit();
 
-      // Scoring: award post creation (fire-and-forget)
-      scoringActionService
-        .awardPostCreated(post.id, req.user.id)
-        .catch((e) => console.error("[scoring] post create failed", e));
+      // Scoring: award post creation (now awaited so we can push points to clients immediately)
+      let authorPoints: number | undefined;
+      let authorLevel: number | undefined;
+      let authorPointsDelta: number | undefined;
+      try {
+        const scoringResult: any = await scoringActionService.awardPostCreated(
+          post.id,
+          req.user.id
+        );
+        const authorTotal = scoringResult?.totals?.find(
+          (t: any) => t.userId === req.user!.id
+        );
+        if (authorTotal) {
+          authorPoints = fromScaled(authorTotal.totalPoints);
+          authorLevel = mapPointsToLevel(Math.floor(authorPoints)).level;
+          authorPointsDelta = 2; // POST_CREATED constant (unscaled)
+        }
+      } catch (e) {
+        console.error("[scoring] post create failed", e);
+      }
 
       // Fetch the created post with author + media + tags for broadcasting
       const createdPost = await DiscussionPost.findByPk(post.id, {
@@ -1082,7 +1098,7 @@ class DiscussionController {
         ],
       });
 
-      // Emit WebSocket event for real-time updates
+      // Emit WebSocket event for real-time updates including scoring snapshot
       try {
         const webSocketService = getWebSocketService();
         const postData = createdPost as any; // Type assertion for associations
@@ -1102,6 +1118,9 @@ class DiscussionController {
           upvotes: 0,
           downvotes: 0,
           replies_count: 0,
+          author_points: authorPoints,
+          author_level: authorLevel,
+          author_points_delta: authorPointsDelta,
           media: (postData.media || []).map((m: any) => ({
             id: m.id,
             media_type: m.media_type,
@@ -1121,6 +1140,10 @@ class DiscussionController {
         data: {
           id: post.id,
           message: "Post created successfully and submitted for moderation",
+          authorPoints,
+          authorLevel,
+          authorPointsDelta,
+          authorId: req.user.id,
         },
       });
     } catch (error) {
@@ -1169,7 +1192,7 @@ class DiscussionController {
         return;
       }
 
-      // Check for existing vote
+      // Fetch existing vote and capture original state BEFORE mutating
       const existingVote = await UserVote.findOne({
         where: {
           user_id: req.user.id,
@@ -1177,27 +1200,38 @@ class DiscussionController {
           target_id: postId,
         },
       });
+      const originalVoteType: "upvote" | "downvote" | null = existingVote
+        ? existingVote.vote_type
+        : null;
 
-      let voteChange = { upvotes: 0, downvotes: 0 };
-
-      if (existingVote) {
-        if (existingVote.vote_type === vote_type) {
-          // Remove vote (toggle off)
-          await existingVote.destroy({ transaction });
-          voteChange[
-            existingVote.vote_type === "upvote" ? "upvotes" : "downvotes"
-          ] = -1;
-        } else {
-          // Change vote
-          const oldVoteType = existingVote.vote_type;
-          existingVote.vote_type = vote_type;
-          await existingVote.save({ transaction });
-
-          voteChange[oldVoteType === "upvote" ? "upvotes" : "downvotes"] = -1;
-          voteChange[vote_type === "upvote" ? "upvotes" : "downvotes"] = 1;
+      // Capture author's points BEFORE scoring (raw points, scaled conversion after fetch)
+      let authorPointsBefore: number | undefined = undefined;
+      try {
+        const authorIdPre = (post as any).author_id;
+        if (authorIdPre) {
+          const { default: UserScoreTotal } = await import(
+            "../models/UserScoreTotal"
+          );
+          const totalRow: any = await UserScoreTotal.findByPk(authorIdPre);
+          if (totalRow) {
+            const { fromScaled } = await import(
+              "../services/scoring/ScoreTypes"
+            );
+            authorPointsBefore = fromScaled(totalRow.total_points || 0);
+          }
         }
-      } else {
-        // Create new vote
+      } catch (e) {
+        console.warn("[votePost] unable to load author pre-vote points", e);
+      }
+
+      let finalUserVote: "upvote" | "downvote" | null = null;
+      const voteChange = { upvotes: 0, downvotes: 0 };
+      const isToggleOff =
+        !!existingVote && existingVote.vote_type === vote_type; // same vote clicked again
+      const isSwitch = !!existingVote && existingVote.vote_type !== vote_type; // different vote clicked
+
+      if (!existingVote) {
+        // New vote
         await UserVote.create(
           {
             user_id: req.user.id,
@@ -1207,37 +1241,68 @@ class DiscussionController {
           },
           { transaction }
         );
-
+        finalUserVote = vote_type;
+        voteChange[vote_type === "upvote" ? "upvotes" : "downvotes"] = 1;
+      } else if (isToggleOff) {
+        // Remove vote
+        await existingVote.destroy({ transaction });
+        finalUserVote = null;
+        voteChange[
+          existingVote.vote_type === "upvote" ? "upvotes" : "downvotes"
+        ] = -1;
+      } else if (isSwitch) {
+        // Switch vote type
+        existingVote.vote_type = vote_type;
+        await existingVote.save({ transaction });
+        finalUserVote = vote_type;
+        voteChange[originalVoteType === "upvote" ? "upvotes" : "downvotes"] =
+          -1;
         voteChange[vote_type === "upvote" ? "upvotes" : "downvotes"] = 1;
       }
 
-      // Update post vote counts
       await post.increment(voteChange, { transaction });
-
       await transaction.commit();
 
-      // Determine final user vote after toggle/change
-      const finalUserVote =
-        existingVote && existingVote.vote_type === vote_type ? null : vote_type;
-
-      // Scoring integration now awaited so we can return fresh author points
-  let authorPoints: number | undefined = undefined;
-  let authorLevel: number | undefined = undefined;
+      // Compute scoring with correct previous/new states
+      let authorPoints: number | undefined = undefined;
+      let authorLevel: number | undefined = undefined;
+      let authorPointsDelta: number | undefined = undefined;
+      let actorPoints: number | undefined = undefined;
+      let actorPointsDelta: number | undefined = undefined;
       try {
-        const previousVote: any = existingVote ? existingVote.vote_type : null;
         const scoringResult: any = await scoringActionService.handlePostVote({
           actorId: req.user.id,
-            post,
-            previousVote,
-            newVote: finalUserVote,
-          });
-        // scoringResult.totals contains scaled totals; find author
+          post,
+          previousVote: originalVoteType,
+          newVote: finalUserVote,
+        });
         if (scoringResult && Array.isArray(scoringResult.totals)) {
           const authorId = (post as any).author_id;
-          const authorTotal = scoringResult.totals.find((t: any) => t.userId === authorId);
+          const authorTotal = scoringResult.totals.find(
+            (t: any) => t.userId === authorId
+          );
           if (authorTotal) {
             authorPoints = fromScaled(authorTotal.totalPoints);
             authorLevel = mapPointsToLevel(Math.floor(authorPoints)).level;
+            if (authorPointsBefore !== undefined) {
+              authorPointsDelta = authorPoints - authorPointsBefore;
+            }
+          }
+          const actorTotal = req.user
+            ? scoringResult.totals.find((t: any) => t.userId === req.user!.id)
+            : undefined;
+          if (actorTotal) {
+            const before = undefined; // (optional: could fetch prior if needed for precision)
+            actorPoints = fromScaled(actorTotal.totalPoints);
+            // If engagement event triggered, delta will usually be +1; fallback to 0
+            if (before !== undefined) actorPointsDelta = actorPoints - before;
+            else if (
+              scoringResult.events?.some(
+                (e: any) => e.type === "REACTION_ENGAGEMENT"
+              )
+            ) {
+              actorPointsDelta = 1;
+            }
           }
         }
       } catch (e) {
@@ -1258,6 +1323,16 @@ class DiscussionController {
           voteType: finalUserVote,
           upvotes: updatedPost?.upvotes || 0,
           downvotes: updatedPost?.downvotes || 0,
+          previous_vote: originalVoteType,
+          is_switch:
+            !!originalVoteType &&
+            !!finalUserVote &&
+            originalVoteType !== finalUserVote,
+          author_points: authorPoints,
+          author_points_delta: authorPointsDelta,
+          author_level: authorLevel,
+          actor_points: actorPoints,
+          actor_points_delta: actorPointsDelta,
         });
 
         // Send notification to post author (only for new votes, not removes)
@@ -1281,6 +1356,7 @@ class DiscussionController {
           userVote: finalUserVote,
           authorPoints: authorPoints,
           authorLevel: authorLevel,
+          authorPointsDelta: authorPointsDelta,
         },
       });
     } catch (error) {
@@ -1363,9 +1439,9 @@ class DiscussionController {
           return;
         }
         post.is_market_post = is_market_post;
-        // If switching to non-market, force available to true (non-market posts are always available)
+        // If switching to non-market, force available to false
         if (!is_market_post) {
-          post.is_available = true;
+          post.is_available = false;
         }
       }
 
@@ -1379,6 +1455,8 @@ class DiscussionController {
         }
         if (post.is_market_post) {
           post.is_available = is_available;
+        } else {
+          post.is_available = false; // enforce rule
         }
       }
 
@@ -2019,22 +2097,117 @@ class DiscussionController {
       await reply.increment(voteChange, { transaction });
       await transaction.commit();
 
-      // Scoring integration for reply vote (with trickle)
+      // Scoring integration for reply vote (with trickle) – await to enrich WS
+      let replyAuthorPoints: number | undefined;
+      let replyAuthorPointsDelta: number | undefined;
+      let actorPoints: number | undefined;
+      let actorPointsDelta: number | undefined;
+      let trickle: Array<{ userId: number; delta: number }> | undefined;
+      let replyClassification: string | null = null;
+      let trickleRoles:
+        | Record<string, { userId: number; delta: number }>
+        | undefined;
+      const previousVote: any = existingVote ? existingVote.vote_type : null;
       try {
-        const previousVote: any = existingVote ? existingVote.vote_type : null;
-        scoringActionService
-          .handleReplyVote({
-            actorId: req.user.id,
-            reply,
-            post:
-              (reply as any).post ||
-              (await DiscussionPost.findByPk(reply.post_id))!,
-            previousVote,
-            newVote: finalUserVote,
-          })
-          .catch((e) => console.error("[scoring] reply vote failed", e));
+        const scoringResult: any = await scoringActionService.handleReplyVote({
+          actorId: req.user.id,
+          reply,
+          post:
+            (reply as any).post ||
+            (await DiscussionPost.findByPk(reply.post_id))!,
+          previousVote,
+          newVote: finalUserVote,
+        });
+        if (scoringResult?.totals) {
+          // Extract classification (from any REACTION_RECEIVED event meta)
+          (scoringResult.events || []).some((e: any) => {
+            if (
+              e.event_type === "REACTION_RECEIVED" &&
+              e.ref_type === "reply" &&
+              e.ref_id === reply.id &&
+              e.meta?.classification
+            ) {
+              replyClassification = e.meta.classification;
+              return true;
+            }
+            return false;
+          });
+          const replyAuthorId = reply.author_id;
+          const replyAuthorTotal = scoringResult.totals.find(
+            (t: any) => t.userId === replyAuthorId
+          );
+          if (replyAuthorTotal) {
+            replyAuthorPoints = fromScaled(replyAuthorTotal.totalPoints);
+            // delta approximation using events since we didn't snapshot before
+            const deltaEvent = scoringResult.events?.filter(
+              (e: any) => e.userId === replyAuthorId
+            );
+            if (deltaEvent?.length) {
+              replyAuthorPointsDelta = deltaEvent.reduce(
+                (acc: number, e: any) => acc + fromScaled(e.deltaPoints),
+                0
+              );
+            }
+          }
+          const actorTotal = req.user
+            ? scoringResult.totals.find((t: any) => t.userId === req.user!.id)
+            : undefined;
+          if (actorTotal) {
+            actorPoints = fromScaled(actorTotal.totalPoints);
+            if (
+              scoringResult.events?.some(
+                (e: any) =>
+                  req.user &&
+                  e.userId === req.user!.id &&
+                  e.type === "REACTION_ENGAGEMENT"
+              )
+            ) {
+              actorPointsDelta = 1;
+            }
+          }
+          // Collect trickle deltas (exclude reply author & actor duplicates)
+          if (Array.isArray(scoringResult.events)) {
+            const byUser: Record<number, number> = {};
+            const roleAgg: Record<string, { userId: number; delta: number }> =
+              {};
+            for (const ev of scoringResult.events) {
+              if (typeof ev.userId === "number") {
+                byUser[ev.userId] =
+                  (byUser[ev.userId] || 0) + fromScaled(ev.deltaPoints);
+              }
+              // Capture role-specific mapping for UI animation clarity
+              if (ev.event_type === "TRICKLE_PARENT") {
+                roleAgg.parent = {
+                  userId: ev.userId,
+                  delta:
+                    (roleAgg.parent?.delta || 0) + fromScaled(ev.deltaPoints),
+                };
+              } else if (ev.event_type === "TRICKLE_GRANDPARENT") {
+                roleAgg.grandparent = {
+                  userId: ev.userId,
+                  delta:
+                    (roleAgg.grandparent?.delta || 0) +
+                    fromScaled(ev.deltaPoints),
+                };
+              } else if (ev.event_type === "TRICKLE_ROOT") {
+                roleAgg.root = {
+                  userId: ev.userId,
+                  delta:
+                    (roleAgg.root?.delta || 0) + fromScaled(ev.deltaPoints),
+                };
+              }
+            }
+            trickle = Object.entries(byUser)
+              .filter(([uid]) => Number(uid) !== reply.author_id)
+              .map(([uid, delta]) => ({ userId: Number(uid), delta }));
+            if (!trickle.length) trickle = undefined;
+
+            // Embed classification & role mapping into scoringResult for later broadcast
+            trickleRoles = roleAgg;
+          }
+        }
       } catch (e) {
-        console.error("[scoring] reply vote dispatch error", e);
+        console.error("[scoring] reply vote processing error", e);
       }
 
       // Reload counts
@@ -2044,6 +2217,7 @@ class DiscussionController {
 
       try {
         const ws = getWebSocketService();
+        // Use locally captured replyClassification & trickleRoles
         ws.broadcastReplyVote({
           replyId,
           postId: postId || (updated as any)?.post_id,
@@ -2051,6 +2225,16 @@ class DiscussionController {
           voteType: finalUserVote,
           upvotes: updated?.upvotes || 0,
           downvotes: updated?.downvotes || 0,
+          previous_vote: previousVote,
+          is_switch:
+            !!previousVote && !!finalUserVote && previousVote !== finalUserVote,
+          reply_author_points: replyAuthorPoints,
+          reply_author_points_delta: replyAuthorPointsDelta,
+          actor_points: actorPoints,
+          actor_points_delta: actorPointsDelta,
+          trickle,
+          reply_classification: replyClassification as any,
+          trickle_roles: trickleRoles as any,
         });
 
         if (finalUserVote) {

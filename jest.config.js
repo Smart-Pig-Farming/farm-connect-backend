@@ -4,4 +4,5 @@ module.exports = {
   testMatch: ["**/tests/**/*.test.ts"],
   moduleFileExtensions: ["ts", "js", "json"],
   verbose: false,
+  globalSetup: "<rootDir>/src/tests/jest.globalSetup.ts",
 };

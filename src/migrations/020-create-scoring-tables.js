@@ -28,9 +28,26 @@ module.exports = {
       created_at: { type: Sequelize.DATE, allowNull: false },
       updated_at: { type: Sequelize.DATE, allowNull: false },
     });
-    await queryInterface.addIndex("score_events", ["user_id", "created_at"]);
-    await queryInterface.addIndex("score_events", ["event_type"]);
-    await queryInterface.addIndex("score_events", ["ref_type", "ref_id"]);
+    const ensureIndex = async (name, sql) => {
+      await queryInterface.sequelize.query(`DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname='public' AND indexname='${name}') THEN
+          EXECUTE '${sql.replace(/'/g, "''")}';
+        END IF;
+      END$$;`);
+    };
+    await ensureIndex(
+      "score_events_user_id_created_at",
+      "CREATE INDEX score_events_user_id_created_at ON score_events(user_id, created_at)"
+    );
+    await ensureIndex(
+      "score_events_event_type",
+      "CREATE INDEX score_events_event_type ON score_events(event_type)"
+    );
+    await ensureIndex(
+      "score_events_ref_type_ref_id",
+      "CREATE INDEX score_events_ref_type_ref_id ON score_events(ref_type, ref_id)"
+    );
 
     // user_score_totals projection
     await queryInterface.createTable("user_score_totals", {
@@ -67,9 +84,18 @@ module.exports = {
       created_at: { type: Sequelize.DATE, allowNull: false },
       updated_at: { type: Sequelize.DATE, allowNull: false },
     });
-    await queryInterface.addIndex("reply_ancestry", ["root_post_id"]);
-    await queryInterface.addIndex("reply_ancestry", ["parent_id"]);
-    await queryInterface.addIndex("reply_ancestry", ["grandparent_id"]);
+    await ensureIndex(
+      "reply_ancestry_root_post_id",
+      "CREATE INDEX reply_ancestry_root_post_id ON reply_ancestry(root_post_id)"
+    );
+    await ensureIndex(
+      "reply_ancestry_parent_id",
+      "CREATE INDEX reply_ancestry_parent_id ON reply_ancestry(parent_id)"
+    );
+    await ensureIndex(
+      "reply_ancestry_grandparent_id",
+      "CREATE INDEX reply_ancestry_grandparent_id ON reply_ancestry(grandparent_id)"
+    );
   },
   async down(queryInterface) {
     await queryInterface.dropTable("reply_ancestry");

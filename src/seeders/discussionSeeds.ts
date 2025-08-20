@@ -133,7 +133,7 @@ export async function seedDiscussionPostsFromMocks(
           upvotes: p.upvotes ?? 0,
           downvotes: p.downvotes ?? 0,
           is_market_post: !!p.isMarketPost,
-          is_available: p.isMarketPost ? !!p.isAvailable : true,
+          is_available: p.isMarketPost ? !!p.isAvailable : false,
           is_approved: p.isModeratorApproved ?? true,
           created_at: createdAt,
           updated_at: createdAt,

@@ -15,13 +15,17 @@ const LEVELS = [
 ];
 
 export function mapPointsToLevel(totalPoints: number): LevelInfo {
+  // Clamp negatives so they don't fall through and incorrectly map to highest level.
+  const effectivePoints = totalPoints < 0 ? 0 : totalPoints;
+
   const lvl =
-    LEVELS.find((l) => totalPoints >= l.min && totalPoints <= l.max) ||
+    LEVELS.find((l) => effectivePoints >= l.min && effectivePoints <= l.max) ||
     LEVELS[LEVELS.length - 1];
+
   const next = LEVELS.find((l) => l.level === lvl.level + 1);
   const spanMin = lvl.min;
-  const spanMax = lvl.max === Infinity ? totalPoints : lvl.max;
-  const pointsIntoLevel = totalPoints - spanMin;
+  const spanMax = lvl.max === Infinity ? effectivePoints : lvl.max;
+  const pointsIntoLevel = Math.max(effectivePoints - spanMin, 0);
   const pointsForLevel =
     spanMax === Infinity ? pointsIntoLevel : spanMax - spanMin + 1;
   return {

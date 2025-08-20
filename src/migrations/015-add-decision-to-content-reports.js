@@ -2,12 +2,36 @@
 
 module.exports = {
   async up(queryInterface, Sequelize) {
-    // Add decision column (enum)
-    await queryInterface.addColumn("content_reports", "decision", {
-      type: Sequelize.ENUM("retained", "deleted", "warned"),
-      allowNull: true,
-    });
-    await queryInterface.addIndex("content_reports", ["decision"]);
+    // Idempotent add of decision column and index
+    const table = "content_reports";
+    const column = "decision";
+
+    const columnExists = await queryInterface.sequelize.query(
+      `SELECT 1 FROM information_schema.columns WHERE table_name = '${table}' AND column_name='${column}' LIMIT 1;`,
+      { type: Sequelize.QueryTypes.SELECT }
+    );
+
+    if (!columnExists.length) {
+      await queryInterface.addColumn(table, column, {
+        type: Sequelize.ENUM("retained", "deleted", "warned"),
+        allowNull: true,
+      });
+    }
+
+    // Guard index creation
+    await queryInterface.sequelize.query(`DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'content_reports_decision'
+      ) THEN
+        BEGIN
+          CREATE INDEX content_reports_decision ON content_reports(decision);
+        EXCEPTION WHEN duplicate_table THEN
+          -- ignore race condition
+          NULL;
+        END;
+      END IF;
+    END$$;`);
   },
 
   async down(queryInterface, Sequelize) {

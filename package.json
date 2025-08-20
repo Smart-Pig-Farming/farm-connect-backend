@@ -17,9 +17,10 @@
     "db:seed": "npx sequelize-cli db:seed:all",
     "db:seed:undo": "npx sequelize-cli db:seed:undo:all",
     "seed:discussions": "ts-node src/scripts/seed_discussions.ts",
+    "db:cleanup": "ts-node src/scripts/cleanup_db.ts",
     "media:migrate": "ts-node src/scripts/migrate_media_to_cloudinary.ts",
     "media:thumbs": "ts-node src/scripts/backfill_cloudinary_thumbnails.ts",
-    "leaderboard:snapshot": "ts-node src/scripts/leaderboard_snapshot.ts"
+    "leaderboard:snapshot": "echo 'Snapshot script removed; dynamic leaderboards active.'"
   },
   "keywords": [
     "nodejs",

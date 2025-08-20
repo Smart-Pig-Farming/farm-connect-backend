@@ -1,6 +1,6 @@
 import { Server } from "socket.io";
 import { Server as HttpServer } from "http";
-import jwt from "jsonwebtoken";
+import * as jwt from "jsonwebtoken";
 import User from "../models/User";
 
 // WebSocket event types
@@ -65,6 +65,10 @@ export interface PostCreateData {
   upvotes: number;
   downvotes: number;
   replies_count: number;
+  // Author scoring snapshot (optional)
+  author_points?: number;
+  author_level?: number;
+  author_points_delta?: number; // usually 2 for creation
   // Minimal media info for clients to render without refetching
   media?: Array<{
     id: string | number;
@@ -101,6 +105,14 @@ export interface PostVoteData {
   voteType: "upvote" | "downvote" | null;
   upvotes: number;
   downvotes: number;
+  // Enriched scoring fields
+  previous_vote?: "upvote" | "downvote" | null;
+  is_switch?: boolean;
+  author_points?: number;
+  author_points_delta?: number;
+  author_level?: number;
+  actor_points?: number;
+  actor_points_delta?: number;
 }
 
 export interface ReplyCreateData {
@@ -133,6 +145,19 @@ export interface ReplyVoteData {
   voteType: "upvote" | "downvote" | null;
   upvotes: number;
   downvotes: number;
+  previous_vote?: "upvote" | "downvote" | null;
+  is_switch?: boolean;
+  reply_author_points?: number;
+  reply_author_points_delta?: number;
+  actor_points?: number;
+  actor_points_delta?: number;
+  trickle?: Array<{ userId: number; delta: number }>;
+  reply_classification?: "supportive" | "contradictory" | null;
+  trickle_roles?: {
+    parent?: { userId: number; delta: number };
+    grandparent?: { userId: number; delta: number };
+    root?: { userId: number; delta: number };
+  };
 }
 
 export interface NotificationData {
@@ -393,27 +418,31 @@ export class WebSocketService {
 
   public broadcastReplyCreate(data: ReplyCreateData) {
     console.log("📡 Broadcasting new reply:", data.id, "to post", data.postId);
-    this.io.emit("reply:create", data);
-    // Broadcast to specific discussion room
-    this.io.to(`post:${data.postId}`).emit("reply:create", data);
+    // Emit only to room to avoid double delivery (clients listening both globally and in-room produced duplicates)
+    this.io
+      .to(`post:${data.postId}`)
+      .emit("reply:create", { ...data, scope: "room" });
   }
 
   public broadcastReplyUpdate(data: ReplyUpdateData) {
     console.log("📡 Broadcasting reply update:", data.id);
-    this.io.emit("reply:update", data);
-    this.io.to(`post:${data.postId}`).emit("reply:update", data);
+    this.io
+      .to(`post:${data.postId}`)
+      .emit("reply:update", { ...data, scope: "room" });
   }
 
   public broadcastReplyDelete(replyId: string, postId: string) {
     console.log("📡 Broadcasting reply deletion:", replyId);
-    this.io.emit("reply:delete", { replyId, postId });
-    this.io.to(`post:${postId}`).emit("reply:delete", { replyId, postId });
+    this.io
+      .to(`post:${postId}`)
+      .emit("reply:delete", { replyId, postId, scope: "room" });
   }
 
   public broadcastReplyVote(data: ReplyVoteData) {
     console.log("📡 Broadcasting reply vote:", data.replyId, data.voteType);
-    this.io.emit("reply:vote", data);
-    this.io.to(`post:${data.postId}`).emit("reply:vote", data);
+    this.io
+      .to(`post:${data.postId}`)
+      .emit("reply:vote", { ...data, scope: "room" });
   }
 
   public sendNotificationToUser(

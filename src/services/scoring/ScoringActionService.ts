@@ -218,8 +218,12 @@ class ScoringActionService {
     };
 
     const addTrickle = async (
-      baseDelta: number,
-      context: { kind: string; classification: string; direction: string }
+      scale: number,
+      context: {
+        kind: string;
+        classification: string;
+        direction: "up" | "down";
+      }
     ) => {
       // Ensure ancestry row exists
       const { parentReply, grandparentReply, rootAuthorId } = await loadChain();
@@ -236,30 +240,38 @@ class ScoringActionService {
             userId: parentAuthorId,
             actorUserId: actorId,
             type: "TRICKLE_PARENT",
-            deltaPoints: Points.TRICKLE_PARENT_SUPPORTIVE,
+            deltaPoints: scale * Points.TRICKLE_PARENT_SUPPORTIVE,
             refType: "reply",
             refId: reply.id,
-            meta: { classification },
+            meta: {
+              classification,
+              role: "parent",
+              ancestor_reply_id: parentReply?.id,
+            },
           });
         if (grandparentReply && grandparentReply.author_id !== replyAuthorId)
           events.push({
             userId: grandparentReply.author_id,
             actorUserId: actorId,
             type: "TRICKLE_GRANDPARENT",
-            deltaPoints: Points.TRICKLE_GRANDPARENT_SUPPORTIVE,
+            deltaPoints: scale * Points.TRICKLE_GRANDPARENT_SUPPORTIVE,
             refType: "reply",
             refId: reply.id,
-            meta: { classification },
+            meta: {
+              classification,
+              role: "grandparent",
+              ancestor_reply_id: grandparentReply.id,
+            },
           });
         if (rootAuthorId && rootAuthorId !== replyAuthorId)
           events.push({
             userId: rootAuthorId,
             actorUserId: actorId,
             type: "TRICKLE_ROOT",
-            deltaPoints: Points.TRICKLE_ROOT_SUPPORTIVE,
+            deltaPoints: scale * Points.TRICKLE_ROOT_SUPPORTIVE,
             refType: "reply",
             refId: reply.id,
-            meta: { classification },
+            meta: { classification, role: "root" },
           });
       }
       // contradictory upvote path (negative trickle to chain)
@@ -272,30 +284,38 @@ class ScoringActionService {
             userId: parentAuthorId,
             actorUserId: actorId,
             type: "TRICKLE_PARENT",
-            deltaPoints: Points.TRICKLE_PARENT_CONTRADICT_UPVOTE,
+            deltaPoints: scale * Points.TRICKLE_PARENT_CONTRADICT_UPVOTE,
             refType: "reply",
             refId: reply.id,
-            meta: { classification },
+            meta: {
+              classification,
+              role: "parent",
+              ancestor_reply_id: parentReply?.id,
+            },
           });
         if (grandparentReply && grandparentReply.author_id !== replyAuthorId)
           events.push({
             userId: grandparentReply.author_id,
             actorUserId: actorId,
             type: "TRICKLE_GRANDPARENT",
-            deltaPoints: Points.TRICKLE_GRANDPARENT_CONTRADICT_UPVOTE,
+            deltaPoints: scale * Points.TRICKLE_GRANDPARENT_CONTRADICT_UPVOTE,
             refType: "reply",
             refId: reply.id,
-            meta: { classification },
+            meta: {
+              classification,
+              role: "grandparent",
+              ancestor_reply_id: grandparentReply.id,
+            },
           });
         if (rootAuthorId && rootAuthorId !== replyAuthorId)
           events.push({
             userId: rootAuthorId,
             actorUserId: actorId,
             type: "TRICKLE_ROOT",
-            deltaPoints: Points.TRICKLE_ROOT_CONTRADICT_UPVOTE,
+            deltaPoints: scale * Points.TRICKLE_ROOT_CONTRADICT_UPVOTE,
             refType: "reply",
             refId: reply.id,
-            meta: { classification },
+            meta: { classification, role: "root" },
           });
       }
       // contradictory downvote path (reverse of above)
@@ -308,69 +328,54 @@ class ScoringActionService {
             userId: parentAuthorId,
             actorUserId: actorId,
             type: "TRICKLE_PARENT",
-            deltaPoints: Points.TRICKLE_PARENT_CONTRADICT_DOWNVOTE,
+            deltaPoints: scale * Points.TRICKLE_PARENT_CONTRADICT_DOWNVOTE,
             refType: "reply",
             refId: reply.id,
-            meta: { classification },
+            meta: {
+              classification,
+              role: "parent",
+              ancestor_reply_id: parentReply?.id,
+            },
           });
         if (grandparentReply && grandparentReply.author_id !== replyAuthorId)
           events.push({
             userId: grandparentReply.author_id,
             actorUserId: actorId,
             type: "TRICKLE_GRANDPARENT",
-            deltaPoints: Points.TRICKLE_GRANDPARENT_CONTRADICT_DOWNVOTE,
+            deltaPoints: scale * Points.TRICKLE_GRANDPARENT_CONTRADICT_DOWNVOTE,
             refType: "reply",
             refId: reply.id,
-            meta: { classification },
+            meta: {
+              classification,
+              role: "grandparent",
+              ancestor_reply_id: grandparentReply.id,
+            },
           });
         if (rootAuthorId && rootAuthorId !== replyAuthorId)
           events.push({
             userId: rootAuthorId,
             actorUserId: actorId,
             type: "TRICKLE_ROOT",
-            deltaPoints: Points.TRICKLE_ROOT_CONTRADICT_DOWNVOTE,
+            deltaPoints: scale * Points.TRICKLE_ROOT_CONTRADICT_DOWNVOTE,
             refType: "reply",
             refId: reply.id,
-            meta: { classification },
+            meta: { classification, role: "root" },
           });
       }
     };
 
     const addInverseTrickleForPrevious = async () => {
-      if (!previousVote) return;
-      if (!classification) return;
-      // Only cases that produced trickle originally:
-      // supportive upvote, contradictory upvote, contradictory downvote
-      const producedTrickle =
+      if (!previousVote || !classification) return;
+      // Only prior votes that produced trickle:
+      const produced =
         (classification === "supportive" && previousVote === "upvote") ||
         (classification === "contradictory" && previousVote === "upvote") ||
         (classification === "contradictory" && previousVote === "downvote");
-      if (!producedTrickle) return;
-      const direction = previousVote === "upvote" ? "up" : "down";
-      // Invert direction semantics for contradictory mapping when removing
-      if (classification === "supportive" && direction === "up") {
-        // previously gave +1/+0.5/+0.25 => now subtract
-        await addTrickle(-1, {
-          kind: "support_inverse",
-          classification,
-          direction: "up",
-        });
-      } else if (classification === "contradictory" && direction === "up") {
-        // previously gave negatives => now add positives (use DownVote contradict mapping inverted?)
-        // Add inverse of negative trickle -> use contradict_downvote values (positive)
-        await addTrickle(1, {
-          kind: "contradict_inverse_up",
-          classification,
-          direction: "down",
-        });
-      } else if (classification === "contradictory" && direction === "down") {
-        // previously gave positives => now subtract positives
-        await addTrickle(-1, {
-          kind: "contradict_inverse_down",
-          classification,
-          direction: "down",
-        });
-      }
+      if (!produced) return;
+      const direction: "up" | "down" =
+        previousVote === "upvote" ? "up" : "down";
+      // Simply apply scale -1 on the same direction/classification to negate prior deltas
+      await addTrickle(-1, { kind: "inverse", classification, direction });
     };
 
     // removal
@@ -414,7 +419,7 @@ class ScoringActionService {
             direction: "up",
           });
       } else if (newVote === "downvote" && classification === "contradictory") {
-        await addTrickle(-1, {
+        await addTrickle(1, {
           kind: "contradict",
           classification,
           direction: "down",
@@ -476,7 +481,7 @@ class ScoringActionService {
             direction: "up",
           });
       } else if (newVote === "downvote" && classification === "contradictory") {
-        await addTrickle(-1, {
+        await addTrickle(1, {
           kind: "contradict",
           classification,
           direction: "down",

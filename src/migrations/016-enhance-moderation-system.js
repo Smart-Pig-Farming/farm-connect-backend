@@ -94,12 +94,22 @@ module.exports = {
       },
     });
 
-    // Add unique constraint for rate limiting
-    await queryInterface.addConstraint("report_rate_limits", {
-      fields: ["reporter_id", "content_id", "content_type"],
-      type: "unique",
-      name: "unique_reporter_content",
-    });
+    // Add unique constraint for rate limiting (idempotent)
+    await queryInterface.sequelize.query(`DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'unique_reporter_content'
+      ) AND NOT EXISTS (
+        SELECT 1 FROM pg_indexes WHERE schemaname='public' AND indexname='unique_reporter_content'
+      ) THEN
+        BEGIN
+          ALTER TABLE report_rate_limits
+          ADD CONSTRAINT unique_reporter_content UNIQUE (reporter_id, content_id, content_type);
+        EXCEPTION WHEN duplicate_object THEN
+          NULL; -- created concurrently
+        END;
+      END IF;
+    END$$;`);
 
     // Add post_snapshot_id column to content_reports for linking
     await queryInterface.addColumn("content_reports", "post_snapshot_id", {
@@ -113,45 +123,50 @@ module.exports = {
     });
 
     // Add performance indexes
-    await queryInterface.addIndex("content_reports", {
-      fields: ["content_type", "status"],
-      name: "idx_content_reports_type_status",
-    });
+    // Helper to create index if missing
+    const ensureIndex = async (indexName, createSql) => {
+      await queryInterface.sequelize.query(`DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname='public' AND indexname='${indexName}') THEN
+          EXECUTE '${createSql.replace(/'/g, "''")}';
+        END IF;
+      END$$;`);
+    };
 
-    await queryInterface.addIndex("content_reports", {
-      fields: ["reporter_id", "created_at"],
-      name: "idx_content_reports_reporter_created",
-    });
+    await ensureIndex(
+      "idx_content_reports_type_status",
+      "CREATE INDEX idx_content_reports_type_status ON content_reports(content_type, status)"
+    );
 
-    await queryInterface.addIndex("content_reports", {
-      fields: ["resolved_at"],
-      name: "idx_content_reports_resolved_at",
-      where: {
-        resolved_at: {
-          [Sequelize.Op.ne]: null,
-        },
-      },
-    });
+    await ensureIndex(
+      "idx_content_reports_reporter_created",
+      "CREATE INDEX idx_content_reports_reporter_created ON content_reports(reporter_id, created_at)"
+    );
 
-    await queryInterface.addIndex("post_snapshots", {
-      fields: ["content_report_id"],
-      name: "idx_post_snapshots_report_id",
-    });
+    await ensureIndex(
+      "idx_content_reports_resolved_at",
+      "CREATE INDEX idx_content_reports_resolved_at ON content_reports(resolved_at) WHERE resolved_at IS NOT NULL"
+    );
 
-    await queryInterface.addIndex("post_snapshots", {
-      fields: ["post_id", "created_at"],
-      name: "idx_post_snapshots_post_created",
-    });
+    await ensureIndex(
+      "idx_post_snapshots_report_id",
+      "CREATE INDEX idx_post_snapshots_report_id ON post_snapshots(content_report_id)"
+    );
 
-    await queryInterface.addIndex("report_rate_limits", {
-      fields: ["reporter_id", "reported_at"],
-      name: "idx_report_rate_limits_reporter_time",
-    });
+    await ensureIndex(
+      "idx_post_snapshots_post_created",
+      "CREATE INDEX idx_post_snapshots_post_created ON post_snapshots(post_id, created_at)"
+    );
 
-    await queryInterface.addIndex("report_rate_limits", {
-      fields: ["content_id", "content_type", "reported_at"],
-      name: "idx_report_rate_limits_content_time",
-    });
+    await ensureIndex(
+      "idx_report_rate_limits_reporter_time",
+      "CREATE INDEX idx_report_rate_limits_reporter_time ON report_rate_limits(reporter_id, reported_at)"
+    );
+
+    await ensureIndex(
+      "idx_report_rate_limits_content_time",
+      "CREATE INDEX idx_report_rate_limits_content_time ON report_rate_limits(content_id, content_type, reported_at)"
+    );
 
     console.log("✅ Enhanced moderation system tables and indexes created");
   },
