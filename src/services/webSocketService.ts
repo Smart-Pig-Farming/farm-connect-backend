@@ -119,6 +119,18 @@ export interface PostVoteData {
   actor_points_delta?: number;
   // Alias used by some frontend handlers; kept for backward compatibility
   userVote?: "upvote" | "downvote" | null;
+  // Event metadata (optional sequencing / staleness guards on client)
+  emitted_at?: string; // ISO timestamp set server-side if absent
+  // Optional full voter id arrays (used by clients for fallback highlight logic)
+  upvoterIds?: number[];
+  downvoterIds?: number[];
+  // Incremental diff (preferred over full arrays when provided)
+  diff?: {
+    addedUp?: number[];
+    removedUp?: number[];
+    addedDown?: number[];
+    removedDown?: number[];
+  };
 }
 
 export interface ReplyCreateData {
@@ -165,6 +177,12 @@ export interface ReplyVoteData {
     root?: { userId: number; delta: number };
   };
   userVote?: "upvote" | "downvote" | null;
+  diff?: {
+    addedUp?: number[];
+    removedUp?: number[];
+    addedDown?: number[];
+    removedDown?: number[];
+  };
 }
 
 export interface NotificationData {
@@ -431,9 +449,19 @@ export class WebSocketService {
   }
 
   public broadcastPostVote(data: PostVoteData) {
-    console.log("📡 Broadcasting post vote:", data.postId, data.voteType);
+    // Enrich with timestamp if not provided to allow clients to perform staleness / ordering guards
+    if (!data.emitted_at) {
+      (data as PostVoteData).emitted_at = new Date().toISOString();
+    }
+    console.log(
+      "📡 Broadcasting post vote:",
+      data.postId,
+      data.voteType,
+      "@",
+      data.emitted_at
+    );
     this.io.emit("post:vote", data);
-    // Also broadcast to specific discussion room
+    // Also broadcast to specific discussion room (room listeners only)
     this.io.to(`post:${data.postId}`).emit("post:vote", data);
   }
 

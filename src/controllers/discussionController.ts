@@ -1386,6 +1386,42 @@ class DiscussionController {
         attributes: ["upvotes", "downvotes"],
       });
 
+      // Construct incremental voter diff (preferred) instead of loading all votes
+      let diff:
+        | {
+            addedUp?: number[];
+            removedUp?: number[];
+            addedDown?: number[];
+            removedDown?: number[];
+          }
+        | undefined;
+      try {
+        const actorId = req.user.id;
+        if (!existingVote && finalUserVote === "upvote") {
+          diff = { addedUp: [actorId] };
+        } else if (!existingVote && finalUserVote === "downvote") {
+          diff = { addedDown: [actorId] };
+        } else if (isToggleOff && originalVoteType === "upvote") {
+          diff = { removedUp: [actorId] };
+        } else if (isToggleOff && originalVoteType === "downvote") {
+          diff = { removedDown: [actorId] };
+        } else if (
+          isSwitch &&
+          originalVoteType === "upvote" &&
+          finalUserVote === "downvote"
+        ) {
+          diff = { removedUp: [actorId], addedDown: [actorId] };
+        } else if (
+          isSwitch &&
+          originalVoteType === "downvote" &&
+          finalUserVote === "upvote"
+        ) {
+          diff = { removedDown: [actorId], addedUp: [actorId] };
+        }
+      } catch (e) {
+        console.warn("[votePost] diff build failed", e);
+      }
+
       // Emit WebSocket event for real-time vote updates
       try {
         const webSocketService = getWebSocketService();
@@ -1407,6 +1443,8 @@ class DiscussionController {
           actor_points_delta: actorPointsDelta,
           // Mirror field name used in frontend onPostVote handler for consistency
           userVote: finalUserVote,
+          emitted_at: new Date().toISOString(),
+          diff,
         });
         if (postVoteScoringResult?.events?.length) {
           try {
@@ -2207,6 +2245,10 @@ class DiscussionController {
         | undefined;
       let replyVoteScoringResult: any = undefined;
       const previousVote: any = existingVote ? existingVote.vote_type : null;
+      // Track toggling/switch meta for diff
+      const isToggleOff =
+        !!existingVote && existingVote.vote_type === vote_type;
+      const isSwitch = !!existingVote && existingVote.vote_type !== vote_type;
       try {
         const scoringResult: any = await scoringActionService.handleReplyVote({
           actorId: req.user.id,
@@ -2315,6 +2357,41 @@ class DiscussionController {
         attributes: ["upvotes", "downvotes", "post_id"],
       });
 
+      // Build incremental diff mirroring post vote diff structure (for future voter array maintenance)
+      let diff:
+        | {
+            addedUp?: number[];
+            removedUp?: number[];
+            addedDown?: number[];
+            removedDown?: number[];
+          }
+        | undefined;
+      try {
+        const actorId = req.user.id;
+        if (!existingVote && finalUserVote === "upvote")
+          diff = { addedUp: [actorId] };
+        else if (!existingVote && finalUserVote === "downvote")
+          diff = { addedDown: [actorId] };
+        else if (isToggleOff && previousVote === "upvote")
+          diff = { removedUp: [actorId] };
+        else if (isToggleOff && previousVote === "downvote")
+          diff = { removedDown: [actorId] };
+        else if (
+          isSwitch &&
+          previousVote === "upvote" &&
+          finalUserVote === "downvote"
+        )
+          diff = { removedUp: [actorId], addedDown: [actorId] };
+        else if (
+          isSwitch &&
+          previousVote === "downvote" &&
+          finalUserVote === "upvote"
+        )
+          diff = { removedDown: [actorId], addedUp: [actorId] };
+      } catch (e) {
+        console.warn("[replyVote] diff build failed", e);
+      }
+
       try {
         const ws = getWebSocketService();
         // Use locally captured replyClassification & trickleRoles
@@ -2335,6 +2412,7 @@ class DiscussionController {
           trickle,
           reply_classification: replyClassification as any,
           trickle_roles: trickleRoles as any,
+          diff,
         });
         if (replyVoteScoringResult?.events?.length) {
           try {
