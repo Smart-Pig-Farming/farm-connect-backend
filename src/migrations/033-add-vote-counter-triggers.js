@@ -2,64 +2,53 @@
 /** @type {import('sequelize-cli').Migration} */
 module.exports = {
   async up(queryInterface, Sequelize) {
-    // 1. Create trigger function (idempotent)
-    await queryInterface.sequelize.query(`DO $$
+    // 1. Create (or replace) trigger function - idempotent and simpler quoting
+    await queryInterface.sequelize.query(`CREATE OR REPLACE FUNCTION apply_user_vote_changes() RETURNS TRIGGER AS $$
     BEGIN
-      IF NOT EXISTS (
-        SELECT 1 FROM pg_proc WHERE proname = 'apply_user_vote_changes'
-      ) THEN
-        EXECUTE $$CREATE OR REPLACE FUNCTION apply_user_vote_changes() RETURNS TRIGGER AS $$$$
-        DECLARE
-          tgt_table text;
-        BEGIN
-          IF (TG_OP = 'INSERT') THEN
-            IF (NEW.target_type = 'post') THEN
-              UPDATE discussion_posts
-                SET upvotes = upvotes + (CASE WHEN NEW.vote_type='upvote' THEN 1 ELSE 0 END),
-                    downvotes = downvotes + (CASE WHEN NEW.vote_type='downvote' THEN 1 ELSE 0 END)
-              WHERE id = NEW.target_id;
-            ELSIF (NEW.target_type = 'reply') THEN
-              UPDATE discussion_replies
-                SET upvotes = upvotes + (CASE WHEN NEW.vote_type='upvote' THEN 1 ELSE 0 END),
-                    downvotes = downvotes + (CASE WHEN NEW.vote_type='downvote' THEN 1 ELSE 0 END)
-              WHERE id = NEW.target_id;
-            END IF;
-            RETURN NEW;
-          ELSIF (TG_OP = 'DELETE') THEN
-            IF (OLD.target_type = 'post') THEN
-              UPDATE discussion_posts
-                SET upvotes = upvotes - (CASE WHEN OLD.vote_type='upvote' THEN 1 ELSE 0 END),
-                    downvotes = downvotes - (CASE WHEN OLD.vote_type='downvote' THEN 1 ELSE 0 END)
-              WHERE id = OLD.target_id;
-            ELSIF (OLD.target_type = 'reply') THEN
-              UPDATE discussion_replies
-                SET upvotes = upvotes - (CASE WHEN OLD.vote_type='upvote' THEN 1 ELSE 0 END),
-                    downvotes = downvotes - (CASE WHEN OLD.vote_type='downvote' THEN 1 ELSE 0 END)
-              WHERE id = OLD.target_id;
-            END IF;
-            RETURN OLD;
-          ELSIF (TG_OP = 'UPDATE') THEN
-            IF (NEW.vote_type <> OLD.vote_type) THEN
-              -- revert old
-              PERFORM 1;
-              IF (NEW.target_type = 'post') THEN
-                UPDATE discussion_posts
-                  SET upvotes = upvotes - (CASE WHEN OLD.vote_type='upvote' THEN 1 ELSE 0 END) + (CASE WHEN NEW.vote_type='upvote' THEN 1 ELSE 0 END),
-                      downvotes = downvotes - (CASE WHEN OLD.vote_type='downvote' THEN 1 ELSE 0 END) + (CASE WHEN NEW.vote_type='downvote' THEN 1 ELSE 0 END)
-                WHERE id = NEW.target_id;
-              ELSIF (NEW.target_type = 'reply') THEN
-                UPDATE discussion_replies
-                  SET upvotes = upvotes - (CASE WHEN OLD.vote_type='upvote' THEN 1 ELSE 0 END) + (CASE WHEN NEW.vote_type='upvote' THEN 1 ELSE 0 END),
-                      downvotes = downvotes - (CASE WHEN OLD.vote_type='downvote' THEN 1 ELSE 0 END) + (CASE WHEN NEW.vote_type='downvote' THEN 1 ELSE 0 END)
-                WHERE id = NEW.target_id;
-              END IF;
-            END IF;
-            RETURN NEW;
+      IF (TG_OP = 'INSERT') THEN
+        IF (NEW.target_type = 'post') THEN
+          UPDATE discussion_posts
+            SET upvotes = upvotes + (CASE WHEN NEW.vote_type='upvote' THEN 1 ELSE 0 END),
+                downvotes = downvotes + (CASE WHEN NEW.vote_type='downvote' THEN 1 ELSE 0 END)
+          WHERE id = NEW.target_id;
+        ELSIF (NEW.target_type = 'reply') THEN
+          UPDATE discussion_replies
+            SET upvotes = upvotes + (CASE WHEN NEW.vote_type='upvote' THEN 1 ELSE 0 END),
+                downvotes = downvotes + (CASE WHEN NEW.vote_type='downvote' THEN 1 ELSE 0 END)
+          WHERE id = NEW.target_id;
+        END IF;
+        RETURN NEW;
+      ELSIF (TG_OP = 'DELETE') THEN
+        IF (OLD.target_type = 'post') THEN
+          UPDATE discussion_posts
+            SET upvotes = upvotes - (CASE WHEN OLD.vote_type='upvote' THEN 1 ELSE 0 END),
+                downvotes = downvotes - (CASE WHEN OLD.vote_type='downvote' THEN 1 ELSE 0 END)
+          WHERE id = OLD.target_id;
+        ELSIF (OLD.target_type = 'reply') THEN
+          UPDATE discussion_replies
+            SET upvotes = upvotes - (CASE WHEN OLD.vote_type='upvote' THEN 1 ELSE 0 END),
+                downvotes = downvotes - (CASE WHEN OLD.vote_type='downvote' THEN 1 ELSE 0 END)
+          WHERE id = OLD.target_id;
+        END IF;
+        RETURN OLD;
+      ELSIF (TG_OP = 'UPDATE') THEN
+        IF (NEW.vote_type <> OLD.vote_type) THEN
+          IF (NEW.target_type = 'post') THEN
+            UPDATE discussion_posts
+              SET upvotes = upvotes - (CASE WHEN OLD.vote_type='upvote' THEN 1 ELSE 0 END) + (CASE WHEN NEW.vote_type='upvote' THEN 1 ELSE 0 END),
+                  downvotes = downvotes - (CASE WHEN OLD.vote_type='downvote' THEN 1 ELSE 0 END) + (CASE WHEN NEW.vote_type='downvote' THEN 1 ELSE 0 END)
+            WHERE id = NEW.target_id;
+          ELSIF (NEW.target_type = 'reply') THEN
+            UPDATE discussion_replies
+              SET upvotes = upvotes - (CASE WHEN OLD.vote_type='upvote' THEN 1 ELSE 0 END) + (CASE WHEN NEW.vote_type='upvote' THEN 1 ELSE 0 END),
+                  downvotes = downvotes - (CASE WHEN OLD.vote_type='downvote' THEN 1 ELSE 0 END) + (CASE WHEN NEW.vote_type='downvote' THEN 1 ELSE 0 END)
+            WHERE id = NEW.target_id;
           END IF;
-          RETURN NULL;
-        END; $$$$ LANGUAGE plpgsql;$$;
+        END IF;
+        RETURN NEW;
       END IF;
-    END$$;`);
+      RETURN NULL;
+    END; $$ LANGUAGE plpgsql;`);
 
     // 2. Attach triggers (if not existing)
     const attach = async (name, when) => {

@@ -173,6 +173,14 @@ export const validateProfileUpdate = [
     .isLength({ min: 2, max: 100 })
     .withMessage("Sector must be between 2 and 100 characters"),
 
+  body("timezone")
+    .optional()
+    .trim()
+    .isLength({ min: 1, max: 64 })
+    .withMessage("Timezone must be 1-64 chars")
+    .matches(/^[A-Za-z0-9_\/-]+$/)
+    .withMessage("Timezone contains invalid characters"),
+
   handleValidationErrors,
 ];
 

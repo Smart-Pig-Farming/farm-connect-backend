@@ -1,8 +1,15 @@
+import { Transaction } from "sequelize";
+import sequelize from "../../config/database";
 import UserStreak from "../../models/UserStreak";
 import scoringService, { ScoreEventInput } from "./ScoringService";
 import { Points } from "./ScoreTypes";
-
-const MILESTONES = [7, 30, 90, 180, 365];
+import {
+  deriveDayContext,
+  shouldIncrement,
+  nextMilestone,
+  STREAK_MILESTONES,
+} from "./StreakHelpers";
+import ScoreEvent from "../../models/ScoreEvent";
 
 function bonusFor(length: number): number | null {
   switch (length) {
@@ -21,76 +28,125 @@ function bonusFor(length: number): number | null {
   }
 }
 
+interface RecordLoginResult {
+  streak: UserStreak;
+  awarded: number | null;
+  nextMilestone: number | null;
+  daysToNext: number | null;
+  alreadyCounted: boolean;
+}
+
 class StreakService {
-  async recordLogin(userId: number) {
-    const today = new Date();
-    const dayStr = today.toISOString().substring(0, 10); // YYYY-MM-DD
+  /**
+   * Record a login for streak purposes.
+   * @param userId user id
+   * @param timezone optional IANA timezone string (future expansion; currently unused beyond context)
+   */
+  async recordLogin(
+    userId: number,
+    timezone?: string
+  ): Promise<RecordLoginResult> {
+    const ctx = deriveDayContext(timezone);
 
-    let streak = await UserStreak.findByPk(userId);
-    if (!streak) {
-      streak = await UserStreak.create({
-        user_id: userId,
-        current_length: 1,
-        best_length: 1,
-        last_day: dayStr as any,
+    return sequelize.transaction(async (t: Transaction) => {
+      let streak = await UserStreak.findByPk(userId, {
+        transaction: t,
+        lock: t.LOCK.UPDATE,
       });
-      const bonus = bonusFor(1); // none
-      return { streak, awarded: null };
-    }
+      if (!streak) {
+        streak = await UserStreak.create(
+          {
+            user_id: userId,
+            current_length: 1,
+            best_length: 1,
+            last_day: ctx.todayStr as any,
+          },
+          { transaction: t }
+        );
+        return {
+          streak,
+          awarded: null,
+          nextMilestone: nextMilestone(1),
+          daysToNext: nextMilestone(1) ? nextMilestone(1)! - 1 : null,
+          alreadyCounted: false,
+        };
+      }
 
-    let lastDayStr: string | null = null;
-    if (streak.last_day) {
-      if (typeof streak.last_day === "string") {
-        // Already a YYYY-MM-DD (DATEONLY) string
-        lastDayStr = (streak.last_day as any).substring(0, 10);
-      } else if (streak.last_day instanceof Date) {
-        lastDayStr = streak.last_day.toISOString().substring(0, 10);
-      } else {
-        try {
-          lastDayStr = new Date(streak.last_day as any)
-            .toISOString()
-            .substring(0, 10);
-        } catch {
-          lastDayStr = null;
+      let lastDayStr: string | null = null;
+      if (streak.last_day) {
+        if (typeof streak.last_day === "string") {
+          lastDayStr = (streak.last_day as any).substring(0, 10);
+        } else if (streak.last_day instanceof Date) {
+          lastDayStr = streak.last_day.toISOString().substring(0, 10);
+        } else {
+          try {
+            lastDayStr = new Date(streak.last_day as any)
+              .toISOString()
+              .substring(0, 10);
+          } catch {
+            lastDayStr = null;
+          }
         }
       }
-    }
 
-    if (lastDayStr === dayStr) {
-      return { streak, awarded: null }; // already counted today
-    }
+      const incDecision = shouldIncrement(lastDayStr, ctx);
+      if (incDecision === 0) {
+        const nm = nextMilestone(streak.current_length);
+        return {
+          streak,
+          awarded: null,
+          nextMilestone: nm,
+          daysToNext: nm ? nm - streak.current_length : null,
+          alreadyCounted: true,
+        };
+      }
 
-    const yesterday = new Date();
-    yesterday.setDate(today.getDate() - 1);
-    const yStr = yesterday.toISOString().substring(0, 10);
+      if (incDecision === 1) {
+        streak.current_length += 1;
+      } else {
+        // reset
+        streak.current_length = 1;
+      }
+      if (streak.current_length > streak.best_length)
+        streak.best_length = streak.current_length;
+      streak.last_day = ctx.todayStr as any;
+      await streak.save({ transaction: t });
 
-    if (lastDayStr === yStr) {
-      streak.current_length += 1;
-    } else {
-      streak.current_length = 1; // reset
-    }
-    if (streak.current_length > streak.best_length)
-      streak.best_length = streak.current_length;
-    streak.last_day = dayStr as any;
-    await streak.save();
+      const bonus = bonusFor(streak.current_length);
+      let awarded: number | null = null;
+      if (bonus) {
+        // Idempotency: check if we already created an event with same ref id
+        const refId = `streak-${streak.current_length}`;
+        const existing = await ScoreEvent.findOne({
+          where: { user_id: userId, event_type: "STREAK_BONUS", ref_id: refId },
+          transaction: t,
+        });
+        if (!existing) {
+          const events: ScoreEventInput[] = [
+            {
+              userId,
+              actorUserId: userId,
+              type: "STREAK_BONUS",
+              deltaPoints: bonus,
+              refType: "system",
+              refId,
+              meta: { length: streak.current_length },
+            },
+          ];
+          await scoringService.recordEvents(events, t);
+          awarded = bonus;
+        }
+      }
 
-    const bonus = bonusFor(streak.current_length);
-    if (bonus) {
-      const events: ScoreEventInput[] = [
-        {
-          userId,
-          actorUserId: userId,
-          type: "STREAK_BONUS",
-          deltaPoints: bonus,
-          refType: "system",
-          refId: `streak-${streak.current_length}`,
-          meta: { length: streak.current_length },
-        },
-      ];
-      await scoringService.recordEvents(events);
-      return { streak, awarded: bonus };
-    }
-    return { streak, awarded: null };
+      const nm = nextMilestone(streak.current_length);
+      return {
+        streak,
+        awarded,
+        nextMilestone: nm,
+        daysToNext: nm ? nm - streak.current_length : null,
+        alreadyCounted: false,
+      };
+    });
   }
 }
 

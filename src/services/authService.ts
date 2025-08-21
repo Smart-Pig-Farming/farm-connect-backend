@@ -412,7 +412,7 @@ class AuthService {
     // Fire-and-forget streak update & possible bonus
     import("./scoring/StreakService").then((mod) => {
       mod.streakService
-        .recordLogin(user.id)
+        .recordLogin(user.id, (user as any).timezone)
         .catch((e) => console.error("[streak] recordLogin failed", e));
     });
 

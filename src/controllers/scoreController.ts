@@ -4,6 +4,7 @@ import { fromScaled } from "../services/scoring/ScoreTypes";
 import ScoreEvent from "../models/ScoreEvent";
 import UserModerationStat from "../models/UserModerationStat";
 import UserStreak from "../models/UserStreak";
+import { nextMilestone as calcNextMilestone } from "../services/scoring/StreakHelpers";
 import UserPrestige from "../models/UserPrestige";
 import { mapPointsToLevel } from "../services/scoring/LevelService";
 import leaderboardAggregationService from "../services/scoring/LeaderboardAggregationService";
@@ -94,7 +95,7 @@ class ScoreController {
 
       const streak = await UserStreak.findByPk(req.user.id);
       // Prepare streak response including last_day so client can detect first load of day
-      let streakPayload: { current: number; best: number; lastDay?: string };
+  let streakPayload: { current: number; best: number; lastDay?: string; nextMilestone?: number | null; daysToNext?: number | null };
       if (streak) {
         let lastDayStr: string | undefined;
         if (streak.last_day) {
@@ -112,13 +113,16 @@ class ScoreController {
             }
           }
         }
+        const nm = calcNextMilestone(streak.current_length);
         streakPayload = {
           current: streak.current_length,
           best: streak.best_length,
           ...(lastDayStr ? { lastDay: lastDayStr } : {}),
+          nextMilestone: nm,
+          daysToNext: nm ? nm - streak.current_length : null,
         };
       } else {
-        streakPayload = { current: 0, best: 0 };
+  streakPayload = { current: 0, best: 0, nextMilestone: 7, daysToNext: 7 };
       }
       res.json({
         success: true,

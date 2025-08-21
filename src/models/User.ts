@@ -15,6 +15,7 @@ export interface UserAttributes {
   sector?: string;
   district?: string;
   province?: string;
+  timezone?: string; // IANA timezone identifier (optional, defaults to UTC)
   points: number;
   is_locked: boolean;
   is_verified: boolean;
@@ -46,6 +47,7 @@ class User
   public sector?: string;
   public district?: string;
   public province?: string;
+  public timezone?: string;
   public points!: number;
   public is_locked!: boolean;
   public is_verified!: boolean;
@@ -113,6 +115,11 @@ User.init(
     province: {
       type: DataTypes.STRING(100),
       allowNull: true,
+    },
+    timezone: {
+      type: DataTypes.STRING(64),
+      allowNull: true,
+      validate: { len: [1, 64] },
     },
     points: {
       type: DataTypes.INTEGER,
