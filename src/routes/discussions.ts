@@ -334,4 +334,37 @@ router.get(
  */
 router.get("/tags", discussionController.getTags);
 
+/**
+ * @route   GET /api/discussions/posts/:id/voters
+ * @desc    Get voters for a specific post
+ * @access  Private (authenticated users only)
+ */
+router.get(
+  "/posts/:id/voters",
+  authenticateWithCookies,
+  discussionController.getPostVoters
+);
+
+/**
+ * @route   GET /api/discussions/replies/:id/voters
+ * @desc    Get voters for a specific reply
+ * @access  Private (authenticated users only)
+ */
+router.get(
+  "/replies/:id/voters",
+  authenticateWithCookies,
+  discussionController.getReplyVoters
+);
+
+/**
+ * @route   POST /api/discussions/replies/voters/bulk
+ * @desc    Bulk fetch voter id arrays for multiple replies
+ * @access  Private (authenticated users only)
+ */
+router.post(
+  "/replies/voters/bulk",
+  authenticateWithCookies,
+  discussionController.getReplyVotersBulk
+);
+
 export default router;

@@ -200,21 +200,10 @@ class DiscussionController {
           through: { attributes: [] },
         },
       ];
-
-      // Add user vote information if user is authenticated
-      if (req.user) {
-        include.push({
-          model: UserVote,
-          as: "votes",
-          where: {
-            user_id: req.user.id,
-          },
-          required: false,
-          attributes: ["vote_type"],
-          // Load child rows in a separate query to avoid affecting pagination
-          separate: true,
-        });
-      }
+      // NOTE: We no longer include per-post user vote via an association include.
+      // Instead we perform one compact batch query AFTER fetching the page of posts
+      // to avoid N additional queries from `separate: true` includes and keep the
+      // main result set stable for pagination (especially cursor mode).
 
       // Tag filtering is handled within the Tag include (required + where) above
 
@@ -305,6 +294,42 @@ class DiscussionController {
       }
 
       // Transform data to match frontend expectations
+      // Prepare userVote map AND aggregate full voter id arrays for highlighting
+      let userVoteMap: Map<string, string> | undefined;
+      let upvotersMap: Map<string, number[]> | undefined;
+      let downvotersMap: Map<string, number[]> | undefined;
+      if (finalPosts.length) {
+        try {
+          const allVotes: any[] = await UserVote.findAll({
+            where: {
+              target_type: "post",
+              target_id: finalPosts.map((p: any) => p.id),
+            } as any,
+            attributes: ["target_id", "user_id", "vote_type"],
+          });
+          upvotersMap = new Map();
+          downvotersMap = new Map();
+          if (req.user) userVoteMap = new Map();
+          for (const v of allVotes) {
+            const pid = String(v.target_id);
+            if (v.vote_type === "upvote") {
+              const arr = upvotersMap.get(pid) || [];
+              arr.push(v.user_id);
+              upvotersMap.set(pid, arr);
+            } else if (v.vote_type === "downvote") {
+              const arr = downvotersMap.get(pid) || [];
+              arr.push(v.user_id);
+              downvotersMap.set(pid, arr);
+            }
+            if (req.user && v.user_id === req.user.id) {
+              userVoteMap!.set(pid, v.vote_type);
+            }
+          }
+        } catch (e) {
+          console.error("[discussions:getPosts] voter aggregation failed", e);
+        }
+      }
+
       const transformedPosts = finalPosts.map((post: any) => {
         const mediaItems = (post.media || []).map((m: any) => {
           const storageKey = m.storage_key;
@@ -353,7 +378,9 @@ class DiscussionController {
             })) || [],
           upvotes: post.upvotes,
           downvotes: post.downvotes,
-          userVote: post.votes?.[0]?.vote_type || null,
+          userVote: userVoteMap?.get(String(post.id)) || null,
+          upvoterIds: upvotersMap?.get(String(post.id)) || [],
+          downvoterIds: downvotersMap?.get(String(post.id)) || [],
           replies: post.replies_count ?? 0,
           shares: 0,
           isMarketPost: post.is_market_post,
@@ -563,18 +590,7 @@ class DiscussionController {
           through: { attributes: [] },
         },
       ];
-
-      // Add user vote information
-      include.push({
-        model: UserVote,
-        as: "votes",
-        where: {
-          user_id: req.user.id,
-        },
-        required: false,
-        attributes: ["vote_type"],
-        separate: true,
-      });
+      // User vote inclusion removed; will batch query after fetch.
 
       // Determine pagination strategy
       const offset = useCursor ? 0 : (pageNum - 1) * limitNum;
@@ -657,6 +673,56 @@ class DiscussionController {
       }
 
       // Transform data (same as getPosts)
+      // Batch load user's votes for these posts (single query)
+      let userVoteMap: Map<string, string> | undefined;
+      // Maps of postId -> array of user ids for each vote type (for client highlighting)
+      let upvotersMap: Map<string, number[]> | undefined;
+      let downvotersMap: Map<string, number[]> | undefined;
+      try {
+        if (finalPosts.length) {
+          // 1. Fetch just the current user's votes for quick userVote resolution
+          const myVoteRows: any[] = await UserVote.findAll({
+            where: {
+              user_id: req.user.id,
+              target_type: "post",
+              target_id: finalPosts.map((p: any) => p.id),
+            } as any,
+            attributes: ["target_id", "vote_type"],
+          });
+          userVoteMap = new Map(
+            myVoteRows.map((r: any) => [String(r.target_id), r.vote_type])
+          );
+
+          // 2. Fetch all voters for these posts in a single batched query
+          const allVoteRows: any[] = await UserVote.findAll({
+            where: {
+              target_type: "post",
+              target_id: finalPosts.map((p: any) => p.id),
+            } as any,
+            attributes: ["target_id", "user_id", "vote_type"],
+          });
+          upvotersMap = new Map();
+          downvotersMap = new Map();
+          for (const r of allVoteRows) {
+            const key = String(r.target_id);
+            if (r.vote_type === "upvote") {
+              const arr = upvotersMap.get(key) || [];
+              arr.push(r.user_id);
+              upvotersMap.set(key, arr);
+            } else if (r.vote_type === "downvote") {
+              const arr = downvotersMap.get(key) || [];
+              arr.push(r.user_id);
+              downvotersMap.set(key, arr);
+            }
+          }
+        }
+      } catch (e) {
+        console.error(
+          "[discussions:getMyPosts] failed to batch load user votes",
+          e
+        );
+      }
+
       const transformedPosts = finalPosts.map((post: any) => {
         const mediaItems = (post.media || []).map((m: any) => {
           const storageKey = m.storage_key;
@@ -705,7 +771,11 @@ class DiscussionController {
             })) || [],
           upvotes: post.upvotes,
           downvotes: post.downvotes,
-          userVote: post.votes?.[0]?.vote_type || null,
+          userVote: userVoteMap?.get(String(post.id)) || null,
+          // New voter id arrays (may be undefined if query failed)
+          upvoterIds: upvotersMap?.get(String(post.id)) || [],
+          // keep arrays always (empty if none) for simpler client logic
+          downvoterIds: downvotersMap?.get(String(post.id)) || [],
           replies: post.replies_count ?? 0,
           shares: 0,
           isMarketPost: post.is_market_post,
@@ -1269,6 +1339,7 @@ class DiscussionController {
       let authorPointsDelta: number | undefined = undefined;
       let actorPoints: number | undefined = undefined;
       let actorPointsDelta: number | undefined = undefined;
+      let postVoteScoringResult: any = undefined;
       try {
         const scoringResult: any = await scoringActionService.handlePostVote({
           actorId: req.user.id,
@@ -1276,6 +1347,7 @@ class DiscussionController {
           previousVote: originalVoteType,
           newVote: finalUserVote,
         });
+        postVoteScoringResult = scoringResult;
         if (scoringResult && Array.isArray(scoringResult.totals)) {
           const authorId = (post as any).author_id;
           const authorTotal = scoringResult.totals.find(
@@ -1333,7 +1405,19 @@ class DiscussionController {
           author_level: authorLevel,
           actor_points: actorPoints,
           actor_points_delta: actorPointsDelta,
+          // Mirror field name used in frontend onPostVote handler for consistency
+          userVote: finalUserVote,
         });
+        if (postVoteScoringResult?.events?.length) {
+          try {
+            webSocketService.broadcastScoreEvents({
+              events: postVoteScoringResult.events,
+              totals: postVoteScoringResult.totals || [],
+            });
+          } catch (e) {
+            console.warn("[ws] score:events broadcast failed (post vote)");
+          }
+        }
 
         // Send notification to post author (only for new votes, not removes)
         if (finalUserVote) {
@@ -1812,19 +1896,6 @@ class DiscussionController {
               ],
               required: false,
             },
-            // Nested user vote for level 1 children
-            ...(req.user
-              ? [
-                  {
-                    model: UserVote,
-                    as: "votes",
-                    where: { user_id: req.user.id },
-                    required: false,
-                    attributes: ["vote_type"],
-                    separate: false,
-                  },
-                ]
-              : []),
             // Grandchildren level (depth 2)
             {
               model: DiscussionReply,
@@ -1836,19 +1907,6 @@ class DiscussionController {
                   attributes: ["id", "firstname", "lastname"],
                   required: false,
                 },
-                // Nested user vote for level 2 children
-                ...(req.user
-                  ? [
-                      {
-                        model: UserVote,
-                        as: "votes",
-                        where: { user_id: req.user.id },
-                        required: false,
-                        attributes: ["vote_type"],
-                        separate: false,
-                      },
-                    ]
-                  : []),
               ],
               required: false,
             },
@@ -1858,16 +1916,7 @@ class DiscussionController {
       ];
 
       // Add user vote information if authenticated
-      if (req.user) {
-        include.push({
-          model: UserVote,
-          as: "votes",
-          where: { user_id: req.user.id },
-          required: false,
-          attributes: ["vote_type"],
-          separate: false,
-        });
-      }
+      // (Removed per-reply UserVote includes; we now aggregate all votes in a single query below for performance.)
 
       const replies = await DiscussionReply.findAll({
         where: {
@@ -1880,6 +1929,49 @@ class DiscussionController {
         limit: Number(limit),
         offset,
       });
+
+      // Collect all reply ids (top-level + nested up to depth 3) for voter aggregation
+      const collectIds = (arr: any[]): string[] => {
+        const out: string[] = [];
+        for (const r of arr) {
+          out.push(r.id);
+          if (Array.isArray(r.childReplies) && r.childReplies.length) {
+            out.push(...collectIds(r.childReplies));
+          }
+        }
+        return out;
+      };
+      const rawReplyIds = collectIds(replies as any);
+      // Maps for voter ids
+      const upvotersMap: Map<string, number[]> = new Map();
+      const downvotersMap: Map<string, number[]> = new Map();
+      let userVoteLookup: Map<string, string> | undefined;
+      try {
+        if (rawReplyIds.length) {
+          const voteRows: any[] = await UserVote.findAll({
+            where: { target_type: "reply", target_id: rawReplyIds } as any,
+            attributes: ["target_id", "user_id", "vote_type"],
+          });
+          if (req.user) userVoteLookup = new Map();
+          for (const v of voteRows) {
+            const rid = String(v.target_id);
+            if (v.vote_type === "upvote") {
+              const arr = upvotersMap.get(rid) || [];
+              arr.push(v.user_id);
+              upvotersMap.set(rid, arr);
+            } else if (v.vote_type === "downvote") {
+              const arr = downvotersMap.get(rid) || [];
+              arr.push(v.user_id);
+              downvotersMap.set(rid, arr);
+            }
+            if (req.user && v.user_id === req.user.id) {
+              userVoteLookup!.set(rid, v.vote_type);
+            }
+          }
+        }
+      } catch (e) {
+        console.error("[discussions:getReplies] voter aggregation failed", e);
+      }
 
       // Total count for pagination (top-level only)
       const total = await DiscussionReply.count({
@@ -1904,7 +1996,9 @@ class DiscussionController {
         createdAt: DiscussionController.formatTimeAgo((r as any).createdAt),
         upvotes: r.upvotes,
         downvotes: r.downvotes,
-        userVote: r.votes?.[0]?.vote_type || null,
+        userVote: userVoteLookup?.get(String(r.id)) || null,
+        upvoterIds: upvotersMap.get(String(r.id)) || [],
+        downvoterIds: downvotersMap.get(String(r.id)) || [],
         childReplies: Array.isArray(r.childReplies)
           ? r.childReplies.map((c: any) => ({
               id: c.id,
@@ -1921,7 +2015,9 @@ class DiscussionController {
               ),
               upvotes: c.upvotes,
               downvotes: c.downvotes,
-              userVote: c.votes?.[0]?.vote_type || null,
+              userVote: userVoteLookup?.get(String(c.id)) || null,
+              upvoterIds: upvotersMap.get(String(c.id)) || [],
+              downvoterIds: downvotersMap.get(String(c.id)) || [],
               childReplies: Array.isArray(c.childReplies)
                 ? c.childReplies.map((gc: any) => ({
                     id: gc.id,
@@ -1938,7 +2034,9 @@ class DiscussionController {
                     ),
                     upvotes: gc.upvotes,
                     downvotes: gc.downvotes,
-                    userVote: gc.votes?.[0]?.vote_type || null,
+                    userVote: userVoteLookup?.get(String(gc.id)) || null,
+                    upvoterIds: upvotersMap.get(String(gc.id)) || [],
+                    downvoterIds: downvotersMap.get(String(gc.id)) || [],
                     childReplies: [],
                   }))
                 : [],
@@ -2107,6 +2205,7 @@ class DiscussionController {
       let trickleRoles:
         | Record<string, { userId: number; delta: number }>
         | undefined;
+      let replyVoteScoringResult: any = undefined;
       const previousVote: any = existingVote ? existingVote.vote_type : null;
       try {
         const scoringResult: any = await scoringActionService.handleReplyVote({
@@ -2118,6 +2217,7 @@ class DiscussionController {
           previousVote,
           newVote: finalUserVote,
         });
+        replyVoteScoringResult = scoringResult;
         if (scoringResult?.totals) {
           // Extract classification (from any REACTION_RECEIVED event meta)
           (scoringResult.events || []).some((e: any) => {
@@ -2236,6 +2336,16 @@ class DiscussionController {
           reply_classification: replyClassification as any,
           trickle_roles: trickleRoles as any,
         });
+        if (replyVoteScoringResult?.events?.length) {
+          try {
+            ws.broadcastScoreEvents({
+              events: replyVoteScoringResult.events,
+              totals: replyVoteScoringResult.totals || [],
+            });
+          } catch (e) {
+            console.warn("[ws] score:events broadcast failed (reply vote)");
+          }
+        }
 
         if (finalUserVote) {
           await notificationService.notifyReplyVote(
@@ -2341,19 +2451,22 @@ class DiscussionController {
       // Increment the post's replies_count
       await DiscussionPost.increment(
         { replies_count: 1 },
-        { where: { id: postId }, transaction }
+        { where: { id: postId } }
       );
 
       await transaction.commit();
 
-      // Scoring: award reply creation & parent reward
+      // Scoring: award reply creation & parent reward (await for unified broadcast)
+      let replyCreateScoringResult: any = undefined;
       try {
         const parentReply = parent_reply_id
           ? await DiscussionReply.findByPk(parent_reply_id)
           : null;
-        scoringActionService
-          .awardReplyCreated(reply, post, parentReply)
-          .catch((e) => console.error("[scoring] reply create failed", e));
+        replyCreateScoringResult = await scoringActionService.awardReplyCreated(
+          reply,
+          post,
+          parentReply
+        );
       } catch (e) {
         console.error("[scoring] reply create scoring dispatch error", e);
       }
@@ -2388,6 +2501,16 @@ class DiscussionController {
           depth,
           created_at: (reply as any).createdAt.toISOString(),
         });
+        if (replyCreateScoringResult?.events?.length) {
+          try {
+            webSocketService.broadcastScoreEvents({
+              events: replyCreateScoringResult.events,
+              totals: replyCreateScoringResult.totals || [],
+            });
+          } catch (e) {
+            console.warn("[ws] score:events broadcast failed (reply create)");
+          }
+        }
 
         // Send notification to post author
         await notificationService.notifyReplyCreated(reply.id, req.user.id);
@@ -2514,6 +2637,154 @@ class DiscussionController {
         success: false,
         error: "Failed to report content",
       });
+    }
+  }
+
+  async getPostVoters(req: any, res: any) {
+    try {
+      const { id } = req.params;
+      const { type = "upvote", limit = 50, cursor } = req.query;
+      if (!["upvote", "downvote"].includes(type))
+        return res.status(400).json({ success: false, error: "Invalid type" });
+      const lim = Math.min(100, Math.max(1, parseInt(String(limit), 10) || 50));
+      const { default: UserVote } = await import("../models/UserVote");
+      const { default: User } = await import("../models/User");
+      const where: any = {
+        target_type: "post",
+        target_id: id,
+        vote_type: type,
+      };
+      if (cursor) where.created_at = { $lt: new Date(cursor as string) } as any;
+      const rows: any[] = await UserVote.findAll({
+        where,
+        include: [
+          {
+            model: User,
+            attributes: ["id", "username", "firstname", "lastname"],
+          },
+        ],
+        order: [["created_at", "DESC"]],
+        limit: lim + 1,
+      });
+      const slice = rows.slice(0, lim);
+      res.json({
+        success: true,
+        data: slice.map((r) => ({
+          userId: r.user_id,
+          voteType: r.vote_type,
+          votedAt: r.created_at,
+          username: r.User?.username,
+          firstname: r.User?.firstname,
+          lastname: r.User?.lastname,
+        })),
+        meta: {
+          hasMore: rows.length > lim,
+          nextCursor:
+            rows.length > lim ? slice[slice.length - 1].created_at : null,
+        },
+      });
+    } catch (e) {
+      console.error("getPostVoters error", e);
+      res.status(500).json({ success: false, error: "Failed to fetch voters" });
+    }
+  }
+
+  async getReplyVoters(req: any, res: any) {
+    try {
+      const { id } = req.params;
+      const { type = "upvote", limit = 50, cursor } = req.query;
+      if (!["upvote", "downvote"].includes(type))
+        return res.status(400).json({ success: false, error: "Invalid type" });
+      const lim = Math.min(100, Math.max(1, parseInt(String(limit), 10) || 50));
+      const { default: UserVote } = await import("../models/UserVote");
+      const { default: User } = await import("../models/User");
+      const where: any = {
+        target_type: "reply",
+        target_id: id,
+        vote_type: type,
+      };
+      if (cursor) where.created_at = { $lt: new Date(cursor as string) } as any;
+      const rows: any[] = await UserVote.findAll({
+        where,
+        include: [
+          {
+            model: User,
+            attributes: ["id", "username", "firstname", "lastname"],
+          },
+        ],
+        order: [["created_at", "DESC"]],
+        limit: lim + 1,
+      });
+      const slice = rows.slice(0, lim);
+      res.json({
+        success: true,
+        data: slice.map((r) => ({
+          userId: r.user_id,
+          voteType: r.vote_type,
+          votedAt: r.created_at,
+          username: r.User?.username,
+          firstname: r.User?.firstname,
+          lastname: r.User?.lastname,
+        })),
+        meta: {
+          hasMore: rows.length > lim,
+          nextCursor:
+            rows.length > lim ? slice[slice.length - 1].created_at : null,
+        },
+      });
+    } catch (e) {
+      console.error("getReplyVoters error", e);
+      res.status(500).json({ success: false, error: "Failed to fetch voters" });
+    }
+  }
+
+  /**
+   * Bulk fetch voter id arrays for multiple replies
+   * POST /api/discussions/replies/voters/bulk
+   * body: { reply_ids: string[] }
+   */
+  async getReplyVotersBulk(
+    req: AuthenticatedRequest,
+    res: Response
+  ): Promise<void> {
+    try {
+      const { reply_ids } = req.body || {};
+      if (!Array.isArray(reply_ids) || !reply_ids.length) {
+        res.status(400).json({
+          success: false,
+          error: "reply_ids must be a non-empty array",
+        });
+        return;
+      }
+      // Limit to reasonable number to prevent huge queries
+      const ids = reply_ids.slice(0, 500);
+      const rows: any[] = await UserVote.findAll({
+        where: { target_type: "reply", target_id: ids } as any,
+        attributes: ["target_id", "user_id", "vote_type"],
+      });
+      const up: Record<string, number[]> = {};
+      const down: Record<string, number[]> = {};
+      for (const r of rows) {
+        const key = String(r.target_id);
+        if (r.vote_type === "upvote") {
+          (up[key] ||= []).push(r.user_id);
+        } else if (r.vote_type === "downvote") {
+          (down[key] ||= []).push(r.user_id);
+        }
+      }
+      res.json({
+        success: true,
+        data: ids.map((id: string) => ({
+          replyId: id,
+          upvoterIds: up[id] || [],
+          downvoterIds: down[id] || [],
+        })),
+      });
+    } catch (e) {
+      console.error("getReplyVotersBulk error", e);
+      res
+        .status(500)
+        .json({ success: false, error: "Failed to fetch reply voters" });
     }
   }
 

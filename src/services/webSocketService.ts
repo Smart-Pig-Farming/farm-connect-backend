@@ -2,6 +2,8 @@ import { Server } from "socket.io";
 import { Server as HttpServer } from "http";
 import * as jwt from "jsonwebtoken";
 import User from "../models/User";
+import { fromScaled } from "./scoring/ScoreTypes";
+import ScoreEvent from "../models/ScoreEvent";
 
 // WebSocket event types
 export interface SocketEvents {
@@ -45,6 +47,8 @@ export interface SocketEvents {
     contentType: "post" | "reply";
   }) => void;
   "moderation:decision": (data: ModerationDecisionEvent) => void;
+  // Scoring (unified batch) events
+  "score:events": (data: { events: ScoreEventWs[] }) => void;
 }
 
 // Data interfaces
@@ -113,6 +117,8 @@ export interface PostVoteData {
   author_level?: number;
   actor_points?: number;
   actor_points_delta?: number;
+  // Alias used by some frontend handlers; kept for backward compatibility
+  userVote?: "upvote" | "downvote" | null;
 }
 
 export interface ReplyCreateData {
@@ -158,6 +164,7 @@ export interface ReplyVoteData {
     grandparent?: { userId: number; delta: number };
     root?: { userId: number; delta: number };
   };
+  userVote?: "upvote" | "downvote" | null;
 }
 
 export interface NotificationData {
@@ -195,6 +202,20 @@ export interface ModerationDecisionEvent {
   moderatorId: number;
   decidedAt: string;
   reportCount: number;
+}
+
+// Unified scoring event (broadcast shape – unscaled deltas & totals)
+export interface ScoreEventWs {
+  id: string;
+  userId: number;
+  actorUserId?: number | null;
+  type: string; // ScoreEventType
+  refType?: string | null;
+  refId?: string | null;
+  delta: number; // unscaled delta
+  totalPoints?: number; // unscaled running total for that user after applying this event batch
+  meta?: any;
+  created_at: string;
 }
 
 // Connected users tracking
@@ -485,6 +506,44 @@ export class WebSocketService {
       data.decision
     );
     this.io.emit("moderation:decision", data);
+  }
+
+  /**
+   * Broadcast a batch of score events produced by a single logical scoring action.
+   * The caller supplies the raw ScoreEvent instances and the updated totals (scaled).
+   */
+  public broadcastScoreEvents(batch: {
+    events: ScoreEvent[];
+    totals: { userId: number; totalPoints: number }[];
+  }) {
+    if (!batch?.events?.length) return;
+    try {
+      const totalMap = new Map<number, number>();
+      batch.totals.forEach((t) => {
+        totalMap.set(t.userId, fromScaled(t.totalPoints));
+      });
+      const out: ScoreEventWs[] = batch.events.map((ev) => {
+        const createdAt: any = (ev as any).created_at || (ev as any).createdAt;
+        return {
+          id: ev.id,
+          userId: (ev as any).user_id,
+          actorUserId: (ev as any).actor_user_id ?? null,
+          type: (ev as any).event_type,
+          refType: (ev as any).ref_type ?? null,
+          refId: (ev as any).ref_id ?? null,
+          delta: fromScaled((ev as any).delta),
+          totalPoints: totalMap.get((ev as any).user_id),
+          meta: (ev as any).meta || null,
+          created_at: createdAt
+            ? new Date(createdAt).toISOString()
+            : new Date().toISOString(),
+        };
+      });
+      console.log("📡 Broadcasting score events batch (count=)", out.length);
+      this.io.emit("score:events", { events: out });
+    } catch (e) {
+      console.error("[ws] failed to broadcast score events", e);
+    }
   }
 
   // Utility methods

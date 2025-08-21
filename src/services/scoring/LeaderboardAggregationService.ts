@@ -53,7 +53,7 @@ class LeaderboardAggregationService {
                 END AS computed_level
          FROM users u
          LEFT JOIN user_score_totals ust ON ust.user_id = u.id
-         ORDER BY total_scaled_points DESC
+         ORDER BY total_scaled_points DESC, u.id ASC -- tie-breaker on user_id for deterministic ordering consistent with getUserRankAndPoints
          LIMIT :limit`,
         { replacements: { limit, scale: POINT_SCALE }, type: QueryTypes.SELECT }
       );
@@ -89,7 +89,7 @@ class LeaderboardAggregationService {
          LEFT JOIN user_score_totals ust ON ust.user_id = u.id
          WHERE pp.period_points IS NOT NULL -- only users with activity in window
        ), ranked AS (
-         SELECT j.*, ROW_NUMBER() OVER (ORDER BY j.period_scaled_points DESC) AS rank
+         SELECT j.*, ROW_NUMBER() OVER (ORDER BY j.period_scaled_points DESC, j.user_id ASC) AS rank
          FROM joined j
        )
        SELECT * FROM ranked
@@ -129,25 +129,27 @@ class LeaderboardAggregationService {
     refDate = new Date()
   ) {
     if (period === "all") {
+      // Use the projection table (user_score_totals) for consistency with leaderboard.get("all")
+      // This avoids divergence when historical score_events are pruned or repaired.
       const rows: any[] = await sequelize.query(
-        `-- NOTE: We intentionally JOIN users to exclude orphan score_events referencing deleted user IDs.
-         -- Otherwise ranks become inflated (e.g., single user seeing rank 11).
-         WITH user_points AS (
-               SELECT se.user_id, SUM(se.delta) AS points
-               FROM score_events se
-               JOIN users u ON u.id = se.user_id
-               GROUP BY se.user_id
-             ), target AS (
-               SELECT COALESCE((SELECT points FROM user_points WHERE user_id = :userId),0) AS points
-             )
-             SELECT (SELECT 1 + COUNT(*) FROM user_points up JOIN target t ON up.points > t.points) AS rank,
-                    (SELECT COUNT(*) FROM user_points) AS total_users,
-                    (SELECT points FROM target) AS points`,
+        `WITH user_points AS (
+           SELECT u.id AS user_id, COALESCE(ust.total_points,0) AS points
+           FROM users u
+           LEFT JOIN user_score_totals ust ON ust.user_id = u.id
+           WHERE COALESCE(ust.total_points,0) > 0 -- only users who have earned points
+         ), ranked AS (
+           SELECT up.*, ROW_NUMBER() OVER (ORDER BY up.points DESC, up.user_id ASC) AS rn
+           FROM user_points up
+         )
+         SELECT (SELECT rn FROM ranked WHERE user_id = :userId) AS rank,
+                (SELECT COUNT(*) FROM user_points) AS total_users,
+                (SELECT points FROM ranked WHERE user_id = :userId) AS points`,
         { replacements: { userId }, type: QueryTypes.SELECT }
       );
-      const r = rows[0];
+      const r = rows[0] || {};
+      const rawRank = Number(r.rank) || 0; // 0 => user absent (no points yet)
       return {
-        rank: Number(r.rank) || 1,
+        rank: rawRank || null,
         totalUsersWithPoints: Number(r.total_users) || 0,
         points: Number(r.points) / POINT_SCALE || 0,
       };
@@ -156,24 +158,26 @@ class LeaderboardAggregationService {
     const end = periodEnd(period, startStr).toISOString();
     const start = startStr + "T00:00:00.000Z";
     const rows: any[] = await sequelize.query(
-      `-- Period-specific rank calculation excluding orphan events.
+      `-- Period-specific row_number ranking with deterministic tie-break
        WITH user_points AS (
          SELECT se.user_id, SUM(se.delta) AS points
          FROM score_events se
          JOIN users u ON u.id = se.user_id
          WHERE se.created_at >= :start AND se.created_at < :end
          GROUP BY se.user_id
-       ), target AS (
-         SELECT COALESCE((SELECT points FROM user_points WHERE user_id = :userId),0) AS points
+       ), ranked AS (
+         SELECT up.*, ROW_NUMBER() OVER (ORDER BY up.points DESC, up.user_id ASC) AS rn
+         FROM user_points up
        )
-       SELECT (SELECT 1 + COUNT(*) FROM user_points up JOIN target t ON up.points > t.points) AS rank,
+       SELECT (SELECT rn FROM ranked WHERE user_id = :userId) AS rank,
               (SELECT COUNT(*) FROM user_points) AS total_users,
-              (SELECT points FROM target) AS points`,
+              (SELECT points FROM ranked WHERE user_id = :userId) AS points`,
       { replacements: { userId, start, end }, type: QueryTypes.SELECT }
     );
-    const r = rows[0];
+    const r = rows[0] || {};
+    const rawRank = Number(r.rank) || 0;
     return {
-      rank: Number(r.rank) || 1,
+      rank: rawRank || null,
       totalUsersWithPoints: Number(r.total_users) || 0,
       points: Number(r.points) / POINT_SCALE || 0,
       periodStart: startStr,
@@ -225,8 +229,9 @@ class LeaderboardAggregationService {
            LEFT JOIN user_score_totals ust ON ust.user_id = u.id
            ${searchClause}
            GROUP BY u.id, u.username, u.firstname, u.lastname, u.district, u.province, u.sector, ust.total_points
+           HAVING COUNT(se.id) > 0 -- exclude users with zero events in the period to match getUserRankAndPoints()
          ), ranked AS (
-           SELECT a.*, ROW_NUMBER() OVER (ORDER BY a.period_points DESC) AS rank
+           SELECT a.*, ROW_NUMBER() OVER (ORDER BY a.period_points DESC, a.user_id ASC) AS rank
            FROM agg a
          )
          SELECT * FROM ranked
@@ -240,6 +245,7 @@ class LeaderboardAggregationService {
            LEFT JOIN score_events se ON se.user_id = u.id ${periodFilter}
            ${searchClause}
            GROUP BY u.id
+           HAVING COUNT(se.id) > 0
          ) x`,
         { replacements, type: QueryTypes.SELECT }
       );
@@ -285,7 +291,7 @@ class LeaderboardAggregationService {
          ${searchClause}
          GROUP BY u.id, u.username, u.firstname, u.lastname, u.district, u.province, u.sector, ust.total_points
        ), ranked AS (
-         SELECT a.*, ROW_NUMBER() OVER (ORDER BY a.total_scaled_points DESC) AS rank
+         SELECT a.*, ROW_NUMBER() OVER (ORDER BY a.total_scaled_points DESC, a.user_id ASC) AS rank
          FROM agg a
        )
        SELECT * FROM ranked
