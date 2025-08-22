@@ -1,5 +1,5 @@
-import { toZonedTime } from "date-fns-tz";
-import { differenceInCalendarDays } from "date-fns";
+import { differenceInCalendarDays, addDays } from "date-fns";
+import { formatInTimeZone } from "date-fns-tz";
 
 export const STREAK_MILESTONES = [7, 30, 90, 180, 365];
 export type SupportedZone = string; // placeholder; could validate against a whitelist later
@@ -13,11 +13,37 @@ export interface DayContext {
 export function deriveDayContext(zone: string | undefined): DayContext {
   const tz = zone && zone.trim() ? zone : "UTC";
   const now = new Date();
-  const zoned = toZonedTime(now, tz);
-  const y = new Date(zoned.getTime());
-  y.setDate(zoned.getDate() - 1);
-  const fmt = (d: Date) => d.toISOString().substring(0, 10); // Using toISOString is safe because date-only portion after converting back will reflect actual calendar day in UTC; for nuanced formatting we could use format with tz.
-  return { todayStr: fmt(zoned), yesterdayStr: fmt(y), zone: tz };
+  // Format directly in the requested timezone to avoid UTC boundary drift.
+  const todayStr = formatInTimeZone(now, tz, "yyyy-MM-dd");
+  const yesterdayStr = formatInTimeZone(addDays(now, -1), tz, "yyyy-MM-dd");
+  return { todayStr, yesterdayStr, zone: tz };
+}
+
+// Dynamically list supported IANA timezones (Node 20+). Fallback to a minimal curated subset if not available.
+let cachedTimezones: string[] | null = null;
+export function listSupportedTimezones(): string[] {
+  if (cachedTimezones) return cachedTimezones!.slice();
+  try {
+    const intlAny: any = Intl as any;
+    if (typeof intlAny.supportedValuesOf === "function") {
+      cachedTimezones = intlAny.supportedValuesOf("timeZone");
+      return cachedTimezones!.slice();
+    }
+  } catch {}
+  cachedTimezones = [
+    "UTC",
+    "Africa/Kigali",
+    "Africa/Nairobi",
+    "Europe/London",
+    "America/New_York",
+    "America/Chicago",
+    "America/Denver",
+    "America/Los_Angeles",
+    "Asia/Dubai",
+    "Asia/Kolkata",
+    "Asia/Tokyo",
+  ];
+  return cachedTimezones!.slice();
 }
 
 export function nextMilestone(current: number) {

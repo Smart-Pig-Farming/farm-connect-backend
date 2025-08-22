@@ -19,6 +19,7 @@ router.get(
 );
 router.get("/users/:userId", scoreController.getUserPublicScore);
 router.get("/leaderboard", scoreController.getLeaderboard);
+router.get("/timezones", scoreController.getSupportedTimezones);
 router.post(
   "/admin/adjust",
   authenticateWithCookies,

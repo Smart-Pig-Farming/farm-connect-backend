@@ -1,11 +1,11 @@
 import { Router } from "express";
 import notificationController from "../controllers/notificationController";
-import { authenticateToken } from "../middleware/auth";
+import { authenticateWithCookies } from "../middleware/cookieAuth";
 
 const router = Router();
 
-// All notification routes require authentication
-router.use(authenticateToken);
+// All notification routes require authentication (cookie-based to align with other routes)
+router.use(authenticateWithCookies);
 
 // Get user notifications with pagination
 router.get("/", notificationController.getNotifications);

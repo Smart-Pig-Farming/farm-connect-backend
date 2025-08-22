@@ -8,7 +8,9 @@ module.exports = {
         type: Sequelize.STRING(64),
         allowNull: true,
       });
-      await queryInterface.addIndex("users", ["timezone"], { name: "users_timezone" });
+      await queryInterface.addIndex("users", ["timezone"], {
+        name: "users_timezone",
+      });
     }
   },
   async down(queryInterface) {

@@ -9,6 +9,7 @@ import UserPrestige from "../models/UserPrestige";
 import { mapPointsToLevel } from "../services/scoring/LevelService";
 import leaderboardAggregationService from "../services/scoring/LeaderboardAggregationService";
 import { scoringActionService } from "../services/scoring/ScoringActionService";
+import { listSupportedTimezones } from "../services/scoring/StreakHelpers";
 
 interface AuthenticatedRequest extends Request {
   user?: { id: number; email: string; role: string; permissions: string[] };
@@ -23,6 +24,17 @@ class ScoreController {
     this.getMyDailyStats = this.getMyDailyStats.bind(this);
     this.adminAdjust = this.adminAdjust.bind(this);
     this.promoteModerator = this.promoteModerator.bind(this);
+    this.getSupportedTimezones = this.getSupportedTimezones.bind(this);
+  }
+  public getSupportedTimezones(req: Request, res: Response) {
+    try {
+      const zones = listSupportedTimezones();
+      res.json({ success: true, data: zones });
+    } catch (e) {
+      res
+        .status(500)
+        .json({ success: false, error: "Failed to list timezones" });
+    }
   }
   private computePrestige(
     totalPoints: number,
@@ -95,7 +107,13 @@ class ScoreController {
 
       const streak = await UserStreak.findByPk(req.user.id);
       // Prepare streak response including last_day so client can detect first load of day
-  let streakPayload: { current: number; best: number; lastDay?: string; nextMilestone?: number | null; daysToNext?: number | null };
+      let streakPayload: {
+        current: number;
+        best: number;
+        lastDay?: string;
+        nextMilestone?: number | null;
+        daysToNext?: number | null;
+      };
       if (streak) {
         let lastDayStr: string | undefined;
         if (streak.last_day) {
@@ -122,7 +140,12 @@ class ScoreController {
           daysToNext: nm ? nm - streak.current_length : null,
         };
       } else {
-  streakPayload = { current: 0, best: 0, nextMilestone: 7, daysToNext: 7 };
+        streakPayload = {
+          current: 0,
+          best: 0,
+          nextMilestone: 7,
+          daysToNext: 7,
+        };
       }
       res.json({
         success: true,

@@ -3,7 +3,8 @@
 module.exports = {
   async up(queryInterface, Sequelize) {
     // 1. Create (or replace) trigger function - idempotent and simpler quoting
-    await queryInterface.sequelize.query(`CREATE OR REPLACE FUNCTION apply_user_vote_changes() RETURNS TRIGGER AS $$
+    await queryInterface.sequelize
+      .query(`CREATE OR REPLACE FUNCTION apply_user_vote_changes() RETURNS TRIGGER AS $$
     BEGIN
       IF (TG_OP = 'INSERT') THEN
         IF (NEW.target_type = 'post') THEN

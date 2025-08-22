@@ -298,7 +298,7 @@ class AuthController {
         province: user.province,
         district: user.district,
         sector: user.sector,
-  timezone: (user as any).timezone || null,
+        timezone: (user as any).timezone || null,
         points: user.points,
         level_id: user.level_id,
         is_verified: user.is_verified,
@@ -335,7 +335,7 @@ class AuthController {
         return;
       }
 
-  const { firstName, lastName, email, timezone } = req.body;
+      const { firstName, lastName, email, timezone } = req.body;
 
       const user = await User.findByPk(req.user.id);
       if (!user) {
