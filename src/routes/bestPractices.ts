@@ -1,7 +1,7 @@
 import { Router } from "express";
 import bestPracticeController from "../controllers/bestPracticeController";
 import { requireAnyPermission } from "../middleware/permissions";
-import { authenticateToken } from "../middleware/auth";
+import { authenticateWithCookies } from "../middleware/cookieAuth";
 import { uploadSingle } from "../middleware/upload";
 
 // Permission strings
@@ -14,9 +14,11 @@ const MANAGE = "MANAGE:BEST_PRACTICES";
 const router = Router();
 
 // Optional auth wrapper (if token provided) to annotate read status
-const optionalAuth = (req: any, res: any, next: any) => {
-  const authHeader = req.headers.authorization;
-  if (authHeader) return authenticateToken(req, res, next);
+// Optional auth: attempt cookie-based auth if access token cookie present; otherwise continue
+const optionalAuth = (req: any, _res: any, next: any) => {
+  if (req.cookies?.accessToken || req.cookies?.refreshToken) {
+    return authenticateWithCookies(req, _res, next);
+  }
   return next();
 };
 
@@ -37,7 +39,7 @@ router.get(
 // Create
 router.post(
   "/",
-  authenticateToken,
+  authenticateWithCookies,
   requireAnyPermission([CREATE, MANAGE]),
   uploadSingle,
   bestPracticeController.create.bind(bestPracticeController)
@@ -53,7 +55,7 @@ router.get(
 // Update
 router.patch(
   "/:id",
-  authenticateToken,
+  authenticateWithCookies,
   requireAnyPermission([UPDATE, MANAGE]),
   uploadSingle,
   bestPracticeController.update.bind(bestPracticeController)
@@ -62,7 +64,7 @@ router.patch(
 // Delete (soft)
 router.delete(
   "/:id",
-  authenticateToken,
+  authenticateWithCookies,
   requireAnyPermission([DELETE_P, MANAGE]),
   bestPracticeController.remove.bind(bestPracticeController)
 );

@@ -44,6 +44,29 @@ function sanitizeCategories(input: any): string[] {
   return input.filter((c) => ALLOWED_CATEGORIES.has(c));
 }
 
+// Accept categories supplied as:
+// - array (already parsed)
+// - JSON string representing an array
+// - single string (wrap into array)
+// - undefined -> empty array
+function parseIncomingCategories(raw: any): string[] {
+  if (Array.isArray(raw)) return sanitizeCategories(raw);
+  if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (!trimmed) return [];
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) return sanitizeCategories(parsed);
+    } catch {
+      // not JSON, treat as single value
+      return sanitizeCategories([raw]);
+    }
+    // Fallback if JSON.parse returned non-array
+    return [];
+  }
+  return [];
+}
+
 class BestPracticeController {
   // GET /api/best-practices/categories
   // Returns count of published, non-deleted practices per allowed category (0 included)
@@ -82,18 +105,41 @@ class BestPracticeController {
         description,
         steps,
         benefits,
-        categories,
+        categories, // may be array or JSON string
         media,
-        is_published,
-      } = req.body;
+      } = req.body; // is_published ignored: auto-publish
       if (!title || !description) {
         return res
           .status(400)
           .json({ error: "title and description required" });
       }
-      const stepsArr = Array.isArray(steps) ? steps : [];
-      const benefitsArr = Array.isArray(benefits) ? benefits : [];
-      const catArr = sanitizeCategories(categories);
+      const stepsArr = Array.isArray(steps)
+        ? steps
+        : typeof steps === "string"
+        ? (() => {
+            try {
+              const parsed = JSON.parse(steps);
+              return Array.isArray(parsed) ? parsed : [];
+            } catch {
+              return [];
+            }
+          })()
+        : [];
+      const benefitsArr = Array.isArray(benefits)
+        ? benefits
+        : typeof benefits === "string"
+        ? (() => {
+            try {
+              const parsed = JSON.parse(benefits);
+              return Array.isArray(parsed) ? parsed : [];
+            } catch {
+              return [];
+            }
+          })()
+        : [];
+      // Support categories sent as categories or categories[] (repeat). If categories[] used, Express will give last value; treat as single string.
+      const rawCategories = categories ?? (req.body as any)["categories[]"]; // capture legacy form-data naming
+      const catArr = parseIncomingCategories(rawCategories);
       // If a file was uploaded via multer single field 'media'
       let mediaPayload = media || null;
       const file = (req as any).file as Express.Multer.File | undefined;
@@ -118,17 +164,20 @@ class BestPracticeController {
         };
       }
 
-      const created = await BestPracticeContent.create({
+      const createPayload: any = {
         title: String(title).trim(),
         description: String(description),
-        steps_json: stepsArr,
-        benefits_json: benefitsArr,
-        categories: catArr,
+        steps_json: stepsArr || [],
+        benefits_json: benefitsArr || [],
+        categories: catArr || [],
         media: mediaPayload,
-        is_published: !!is_published,
+        // Auto-publish on creation
+        is_published: true,
         language: "en",
         created_by: req.user.id,
-      });
+      };
+
+      const created = await BestPracticeContent.create(createPayload);
       return res.status(201).json({ practice: created });
     } catch (e) {
       console.error("[bestPractices:create]", e);
@@ -182,6 +231,9 @@ class BestPracticeController {
           "is_published",
           "created_at",
           "read_count",
+          // Include raw JSON fields for local parsing (may contain stringified arrays in legacy rows)
+          "steps_json",
+          "benefits_json",
         ],
       });
 
@@ -217,6 +269,32 @@ class BestPracticeController {
         read: !!readMap[p.id],
         last_read_at: readMap[p.id]?.last_read_at || null,
         read_count: p.read_count,
+        steps_count: (() => {
+          const raw = (p as any).get?.("steps_json") ?? (p as any).steps_json;
+          if (Array.isArray(raw)) return raw.length;
+          if (typeof raw === "string") {
+            try {
+              const parsed = JSON.parse(raw);
+              return Array.isArray(parsed) ? parsed.length : 0;
+            } catch {
+              return 0;
+            }
+          }
+          return 0;
+        })(),
+        benefits_count: (() => {
+          const raw = (p as any).get?.("benefits_json") ?? (p as any).benefits_json;
+            if (Array.isArray(raw)) return raw.length;
+            if (typeof raw === "string") {
+              try {
+                const parsed = JSON.parse(raw);
+                return Array.isArray(parsed) ? parsed.length : 0;
+              } catch {
+                return 0;
+              }
+            }
+            return 0;
+        })(),
       }));
 
       return res.json({
@@ -245,16 +323,77 @@ class BestPracticeController {
       });
       if (!practice) return res.status(404).json({ error: "Not found" });
 
-      // Record read receipt
+      // Sanitize legacy / incorrect stringified JSON in JSONB fields
+      try {
+        const rawSteps: any = (practice as any).get("steps_json");
+        if (typeof rawSteps === "string") {
+          try {
+            const parsed = JSON.parse(rawSteps);
+            if (Array.isArray(parsed)) (practice as any).set("steps_json", parsed);
+          } catch {/* ignore parse errors */}
+        }
+        const rawBenefits: any = (practice as any).get("benefits_json");
+        if (typeof rawBenefits === "string") {
+          try {
+            const parsed = JSON.parse(rawBenefits);
+            if (Array.isArray(parsed)) (practice as any).set("benefits_json", parsed);
+          } catch {/* ignore */}
+        }
+      } catch {/* noop */}
+
+      // Record read receipt (manual upsert to tolerate missing unique constraint in some envs)
       if (req.user) {
         await sequelize.transaction(async (t: Transaction) => {
-          await sequelize.query(
-            `INSERT INTO best_practice_reads (best_practice_id,user_id,first_read_at,last_read_at,read_count)
-             VALUES (:bpId,:uid,NOW(),NOW(),1)
-             ON CONFLICT (best_practice_id,user_id)
-             DO UPDATE SET last_read_at=EXCLUDED.last_read_at, read_count=best_practice_reads.read_count+1`,
-            { replacements: { bpId: id, uid: req.user!.id }, transaction: t }
-          );
+          try {
+            // Try direct insert first (will succeed if no duplicate yet)
+            await sequelize.query(
+              `INSERT INTO best_practice_reads (best_practice_id,user_id,first_read_at,last_read_at,read_count)
+               VALUES (:bpId,:uid,NOW(),NOW(),1)`,
+              { replacements: { bpId: id, uid: req.user!.id }, transaction: t }
+            );
+          } catch (err: any) {
+            // If unique constraint exists and duplicate insert fails OR constraint missing (we fall back), perform update-or-insert manually
+            const existing: any[] = await sequelize.query(
+              `SELECT id, read_count FROM best_practice_reads WHERE best_practice_id = :bpId AND user_id = :uid FOR UPDATE`,
+              {
+                replacements: { bpId: id, uid: req.user!.id },
+                type: QueryTypes.SELECT,
+                transaction: t,
+              }
+            );
+            if (existing.length) {
+              await sequelize.query(
+                `UPDATE best_practice_reads SET last_read_at = NOW(), read_count = read_count + 1 WHERE id = :rid`,
+                { replacements: { rid: (existing[0] as any).id }, transaction: t }
+              );
+            } else {
+              // Insert again (race resolved by FOR UPDATE scope above)
+              await sequelize.query(
+                `INSERT INTO best_practice_reads (best_practice_id,user_id,first_read_at,last_read_at,read_count)
+                 VALUES (:bpId,:uid,NOW(),NOW(),1)`,
+                { replacements: { bpId: id, uid: req.user!.id }, transaction: t }
+              );
+            }
+            // Attempt to (re)create unique constraint silently if missing
+            await sequelize
+              .query(
+                `DO $$ BEGIN
+                   IF NOT EXISTS (
+                     SELECT 1 FROM pg_constraint c
+                     JOIN pg_class t ON c.conrelid = t.oid
+                     WHERE t.relname = 'best_practice_reads' AND c.conname = 'uniq_bp_read_user'
+                   ) THEN
+                     BEGIN
+                       ALTER TABLE best_practice_reads ADD CONSTRAINT uniq_bp_read_user UNIQUE (best_practice_id, user_id);
+                     EXCEPTION WHEN others THEN
+                       -- ignore if created concurrently
+                     END;
+                   END IF;
+                 END $$;`,
+                { transaction: t }
+              )
+              .catch(() => {});
+          }
           await sequelize.query(
             `UPDATE best_practice_contents SET read_count = read_count + 1 WHERE id = :bpId`,
             { replacements: { bpId: id }, transaction: t }
@@ -349,8 +488,9 @@ class BestPracticeController {
         }
         mediaCleared = true;
       }
-      if (patch.categories)
-        patch.categories = sanitizeCategories(patch.categories);
+      if (patch.categories) {
+        patch.categories = parseIncomingCategories(patch.categories);
+      }
       if (patch.steps) {
         patch.steps_json = patch.steps;
         delete patch.steps;
@@ -359,6 +499,8 @@ class BestPracticeController {
         patch.benefits_json = patch.benefits;
         delete patch.benefits;
       }
+      // Always force publish (unless removed via separate delete endpoint)
+      patch.is_published = true;
       await practice.update(patch);
 
       // Delete old media asset AFTER successful update (fire & forget)
