@@ -283,17 +283,18 @@ class BestPracticeController {
           return 0;
         })(),
         benefits_count: (() => {
-          const raw = (p as any).get?.("benefits_json") ?? (p as any).benefits_json;
-            if (Array.isArray(raw)) return raw.length;
-            if (typeof raw === "string") {
-              try {
-                const parsed = JSON.parse(raw);
-                return Array.isArray(parsed) ? parsed.length : 0;
-              } catch {
-                return 0;
-              }
+          const raw =
+            (p as any).get?.("benefits_json") ?? (p as any).benefits_json;
+          if (Array.isArray(raw)) return raw.length;
+          if (typeof raw === "string") {
+            try {
+              const parsed = JSON.parse(raw);
+              return Array.isArray(parsed) ? parsed.length : 0;
+            } catch {
+              return 0;
             }
-            return 0;
+          }
+          return 0;
         })(),
       }));
 
@@ -329,17 +330,25 @@ class BestPracticeController {
         if (typeof rawSteps === "string") {
           try {
             const parsed = JSON.parse(rawSteps);
-            if (Array.isArray(parsed)) (practice as any).set("steps_json", parsed);
-          } catch {/* ignore parse errors */}
+            if (Array.isArray(parsed))
+              (practice as any).set("steps_json", parsed);
+          } catch {
+            /* ignore parse errors */
+          }
         }
         const rawBenefits: any = (practice as any).get("benefits_json");
         if (typeof rawBenefits === "string") {
           try {
             const parsed = JSON.parse(rawBenefits);
-            if (Array.isArray(parsed)) (practice as any).set("benefits_json", parsed);
-          } catch {/* ignore */}
+            if (Array.isArray(parsed))
+              (practice as any).set("benefits_json", parsed);
+          } catch {
+            /* ignore */
+          }
         }
-      } catch {/* noop */}
+      } catch {
+        /* noop */
+      }
 
       // Record read receipt (manual upsert to tolerate missing unique constraint in some envs)
       if (req.user) {
@@ -364,14 +373,20 @@ class BestPracticeController {
             if (existing.length) {
               await sequelize.query(
                 `UPDATE best_practice_reads SET last_read_at = NOW(), read_count = read_count + 1 WHERE id = :rid`,
-                { replacements: { rid: (existing[0] as any).id }, transaction: t }
+                {
+                  replacements: { rid: (existing[0] as any).id },
+                  transaction: t,
+                }
               );
             } else {
               // Insert again (race resolved by FOR UPDATE scope above)
               await sequelize.query(
                 `INSERT INTO best_practice_reads (best_practice_id,user_id,first_read_at,last_read_at,read_count)
                  VALUES (:bpId,:uid,NOW(),NOW(),1)`,
-                { replacements: { bpId: id, uid: req.user!.id }, transaction: t }
+                {
+                  replacements: { bpId: id, uid: req.user!.id },
+                  transaction: t,
+                }
               );
             }
             // Attempt to (re)create unique constraint silently if missing
