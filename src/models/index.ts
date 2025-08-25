@@ -15,6 +15,7 @@ import ContentTagAssignment from "./ContentTagAssignment";
 import PostTag from "./PostTag";
 import BestPracticeContent from "./BestPracticeContent";
 import BestPracticeTag from "./BestPracticeTag";
+import BestPracticeRead from "./BestPracticeRead";
 import Quiz from "./Quiz";
 import { PasswordResetToken } from "./PasswordResetToken";
 // Discussions system models
@@ -372,6 +373,7 @@ export {
   PostTag,
   BestPracticeContent,
   BestPracticeTag,
+  BestPracticeRead,
   Quiz,
   PasswordResetToken,
   DiscussionPost,
