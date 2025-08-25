@@ -26,6 +26,7 @@ import moderationRoutes from "./routes/moderation";
 import notificationRoutes from "./routes/notifications";
 import scoreRoutes from "./routes/score";
 import bestPracticeRoutes from "./routes/bestPractices";
+import quizRoutes from "./routes/quizzes";
 
 class App {
   public app: Application;
@@ -213,6 +214,9 @@ class App {
 
     // Best Practices routes
     this.app.use("/api/best-practices", bestPracticeRoutes);
+
+    // Quiz routes
+    this.app.use("/api/quizzes", quizRoutes);
 
     // Test routes (for development/testing)
     this.app.use("/api/test", testRoutes);

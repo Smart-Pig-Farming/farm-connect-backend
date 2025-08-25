@@ -17,6 +17,10 @@ import BestPracticeContent from "./BestPracticeContent";
 import BestPracticeTag from "./BestPracticeTag";
 import BestPracticeRead from "./BestPracticeRead";
 import Quiz from "./Quiz";
+import QuizQuestion from "./QuizQuestion";
+import QuizQuestionOption from "./QuizQuestionOption";
+import QuizAttempt from "./QuizAttempt";
+import QuizAttemptAnswer from "./QuizAttemptAnswer";
 import { PasswordResetToken } from "./PasswordResetToken";
 // Discussions system models
 import DiscussionPost from "./DiscussionPost";
@@ -187,6 +191,56 @@ Quiz.belongsTo(BestPracticeTag, {
 BestPracticeTag.hasMany(Quiz, {
   foreignKey: "best_practice_tag_id",
   as: "quizzes",
+});
+
+// Quiz questions
+Quiz.hasMany(QuizQuestion, {
+  foreignKey: "quiz_id",
+  as: "questions",
+  onDelete: "CASCADE",
+});
+QuizQuestion.belongsTo(Quiz, { foreignKey: "quiz_id", as: "quiz" });
+
+// Question options
+QuizQuestion.hasMany(QuizQuestionOption, {
+  foreignKey: "question_id",
+  as: "options",
+  onDelete: "CASCADE",
+});
+QuizQuestionOption.belongsTo(QuizQuestion, {
+  foreignKey: "question_id",
+  as: "question",
+});
+
+// Quiz attempts & answers
+Quiz.hasMany(QuizAttempt, {
+  foreignKey: "quiz_id",
+  as: "attempts",
+  onDelete: "CASCADE",
+});
+QuizAttempt.belongsTo(Quiz, { foreignKey: "quiz_id", as: "quiz" });
+User.hasMany(QuizAttempt, {
+  foreignKey: "user_id",
+  as: "quizAttempts",
+  onDelete: "CASCADE",
+});
+QuizAttempt.belongsTo(User, { foreignKey: "user_id", as: "user" });
+QuizAttempt.hasMany(QuizAttemptAnswer, {
+  foreignKey: "attempt_id",
+  as: "answers",
+  onDelete: "CASCADE",
+});
+QuizAttemptAnswer.belongsTo(QuizAttempt, {
+  foreignKey: "attempt_id",
+  as: "attempt",
+});
+QuizAttemptAnswer.belongsTo(QuizQuestion, {
+  foreignKey: "question_id",
+  as: "question",
+});
+QuizAttemptAnswer.belongsTo(QuizQuestionOption, {
+  foreignKey: "option_id",
+  as: "option",
 });
 
 // ***** DISCUSSION SYSTEM RELATIONSHIPS *****
