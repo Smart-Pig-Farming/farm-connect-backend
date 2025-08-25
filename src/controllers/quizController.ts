@@ -267,7 +267,10 @@ class QuizController {
       const full = await QuizQuestion.findByPk(question.id, {
         include: [{ model: QuizQuestionOption, as: "options" }],
       });
-      return res.status(201).json({ question: full });
+      const createdObj: any = full?.toJSON ? full.toJSON() : full;
+      if (createdObj && createdObj.id && !createdObj.question_id)
+        createdObj.question_id = createdObj.id;
+      return res.status(201).json({ question: createdObj });
     } catch (e) {
       console.error("[quizQuestions:create]", e);
       return res.status(500).json({ error: "Failed to create question" });
@@ -278,17 +281,59 @@ class QuizController {
   async listQuestions(req: AuthRequest, res: Response) {
     try {
       const quizId = Number(req.params.quizId);
-      const { limit = 20, offset = 0 } = req.query;
+      const {
+        limit = 20,
+        offset = 0,
+        search = "",
+        difficulty,
+        type,
+        random,
+      } = req.query as any;
       const limitNum = Math.min(100, Number(limit) || 20);
       const offsetNum = Math.max(0, Number(offset) || 0);
       const where: any = { quiz_id: quizId };
+
+      // Difficulty filter (supports comma-separated list)
+      if (difficulty) {
+        const diffs = String(difficulty)
+          .split(",")
+          .map((d) => d.trim())
+          .filter(Boolean);
+        if (diffs.length === 1) where.difficulty = diffs[0];
+        else if (diffs.length > 1) where.difficulty = { [Op.in]: diffs };
+      }
+
+      // Type filter (supports comma-separated list)
+      if (type) {
+        let types = String(type)
+          .split(",")
+          .map((t) => t.trim())
+          .filter(Boolean)
+          // Allow legacy UI value 'boolean' as synonym for enum 'truefalse'
+          .map((t) => (t === "boolean" ? "truefalse" : t));
+        if (types.length === 1) where.type = types[0];
+        else if (types.length > 1) where.type = { [Op.in]: types };
+      }
+
+      // Text search across question text & explanation
+      if (search && typeof search === "string" && search.trim()) {
+        where[Op.or] = [
+          { text: { [Op.iLike]: `%${search.trim()}%` } },
+          { explanation: { [Op.iLike]: `%${search.trim()}%` } },
+        ];
+      }
       const total = await QuizQuestion.count({ where });
+      const order = random
+        ? (sequelize.random() as any)
+        : [
+            ["order_index", "ASC"],
+            ["id", "ASC"],
+          ];
       const items = await QuizQuestion.findAll({
         where,
-        order: [
-          ["order_index", "ASC"],
-          ["id", "ASC"],
-        ],
+        order: Array.isArray(order) ? (order as any) : undefined,
+        // If random is true we rely on DB random order, else deterministic ordering
+        ...(random ? { order: sequelize.random() as any } : {}),
         limit: limitNum,
         offset: offsetNum,
         include: [{ model: QuizQuestionOption, as: "options" }],
@@ -298,6 +343,8 @@ class QuizController {
       );
       const sanitized = items.map((q) => {
         const obj: any = q.toJSON();
+        // Provide a stable question_id alias expected by some frontend consumers
+        if (obj && obj.id && !obj.question_id) obj.question_id = obj.id;
         if (!canSeeAnswers && obj.options) {
           for (const o of obj.options) delete o.is_correct;
         }
@@ -337,6 +384,7 @@ class QuizController {
         (p) => p.includes("MANAGE:QUIZZES") || p.includes("UPDATE:QUIZZES")
       );
       const obj: any = question.toJSON();
+      if (obj && obj.id && !obj.question_id) obj.question_id = obj.id;
       if (!canSeeAnswers && obj.options)
         obj.options.forEach((o: any) => delete o.is_correct);
       return res.json({ question: obj });
@@ -355,12 +403,26 @@ class QuizController {
         include: [{ model: QuizQuestionOption, as: "options" }],
       });
       if (!question) return res.status(404).json({ error: "Not found" });
-      const { text, explanation, order_index, options } = req.body;
+      const { text, explanation, order_index, options, type, difficulty } =
+        req.body;
       const patch: any = {};
       if (text !== undefined) patch.text = String(text);
       if (explanation !== undefined)
         patch.explanation = explanation ? String(explanation) : null;
       if (order_index !== undefined) patch.order_index = Number(order_index);
+      // Allow updating type & difficulty if provided and valid
+      if (type !== undefined) {
+        const allowedTypes = ["mcq", "multi", "truefalse"];
+        if (!allowedTypes.includes(type))
+          return res.status(400).json({ error: "Invalid type" });
+        patch.type = type;
+      }
+      if (difficulty !== undefined) {
+        const allowedDiffs = ["easy", "medium", "hard"];
+        if (!allowedDiffs.includes(difficulty))
+          return res.status(400).json({ error: "Invalid difficulty" });
+        patch.difficulty = difficulty;
+      }
       await question.update(patch);
       // Optional options update (replace strategy)
       if (options !== undefined) {
@@ -390,7 +452,10 @@ class QuizController {
       const full = await QuizQuestion.findByPk(question.id, {
         include: [{ model: QuizQuestionOption, as: "options" }],
       });
-      return res.json({ question: full });
+      const updatedObj: any = full?.toJSON ? full.toJSON() : full;
+      if (updatedObj && updatedObj.id && !updatedObj.question_id)
+        updatedObj.question_id = updatedObj.id;
+      return res.json({ question: updatedObj });
     } catch (e) {
       console.error("[quizQuestions:update]", e);
       return res.status(500).json({ error: "Failed to update question" });
@@ -451,6 +516,8 @@ class QuizController {
       // sanitize answers
       const sanitizedQuestions = questions.map((q) => {
         const obj: any = q.toJSON();
+        // Provide a stable question_id alias for attempt consumption
+        if (obj && obj.id && !obj.question_id) obj.question_id = obj.id;
         if (obj.options) obj.options.forEach((o: any) => delete o.is_correct);
         return obj;
       });
@@ -627,13 +694,23 @@ class QuizController {
   async quizStats(req: AuthRequest, res: Response) {
     try {
       const quizId = Number(req.params.id);
+      const hasUser = !!req.user;
       const row = await sequelize.query(
         `SELECT
-           COUNT(*) FILTER (WHERE submitted_at IS NOT NULL) as attempts_submitted,
-           AVG(score_percent) as avg_percent,
-           AVG(CASE WHEN passed THEN 1 ELSE 0 END) as pass_rate
-         FROM quiz_attempts WHERE quiz_id = :quizId`,
-        { type: QueryTypes.SELECT, replacements: { quizId } }
+           COUNT(*) FILTER (WHERE submitted_at IS NOT NULL) AS attempts_submitted,
+           AVG(score_percent) AS avg_percent,
+           AVG(CASE WHEN passed THEN 1 ELSE 0 END) AS pass_rate,
+           ${
+             hasUser
+               ? "AVG(score_percent) FILTER (WHERE user_id = :userId) AS user_avg_percent"
+               : "NULL AS user_avg_percent"
+           }
+         FROM quiz_attempts
+         WHERE quiz_id = :quizId`,
+        {
+          type: QueryTypes.SELECT,
+          replacements: { quizId, userId: hasUser ? req.user!.id : null },
+        }
       );
       const data: any = row[0] || {};
       let bestAttempt: any = null;
@@ -658,6 +735,11 @@ class QuizController {
             data.avg_percent !== null
               ? Math.round(Number(data.avg_percent))
               : 0,
+          user_average_percent:
+            data.user_avg_percent !== null &&
+            data.user_avg_percent !== undefined
+              ? Math.round(Number(data.user_avg_percent))
+              : null,
           success_rate:
             data.pass_rate !== null
               ? Math.round(Number(data.pass_rate) * 100)
