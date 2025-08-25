@@ -417,23 +417,90 @@ class BestPracticeController {
       }
 
       // Prev/Next navigation by created_at within same first category (or overall if none)
-      const catContext = practice.categories?.[0];
-      const baseWhere: any = { is_deleted: false, is_published: true };
-      if (catContext)
-        baseWhere.categories = { [Op.contains]: [catContext] } as any;
+      // Enhanced navigation: accept optional filter params to keep context consistent with list view
+      // query params: search, category, created_by, published
+      const { search, category, created_by, published } = req.query as Record<
+        string,
+        string | undefined
+      >;
+      const filterWhere: any = { is_deleted: false };
+      if (published !== undefined)
+        filterWhere.is_published = published === "true";
+      else filterWhere.is_published = true; // detail nav constrained to published by default
+      if (search) {
+        filterWhere[Op.or] = [
+          { title: { [Op.iLike]: `%${search}%` } },
+          { description: { [Op.iLike]: `%${search}%` } },
+        ];
+      }
+      if (category) {
+        filterWhere.categories = { [Op.contains]: [category] } as any;
+      }
+      if (created_by && !isNaN(Number(created_by))) {
+        filterWhere.created_by = Number(created_by);
+      }
 
-      const [prevItem, nextItem] = await Promise.all([
-        BestPracticeContent.findOne({
-          where: { ...baseWhere, created_at: { [Op.lt]: practice.created_at } },
-          order: [["created_at", "DESC"]],
-          attributes: ["id"],
-        }),
-        BestPracticeContent.findOne({
-          where: { ...baseWhere, created_at: { [Op.gt]: practice.created_at } },
-          order: [["created_at", "ASC"]],
-          attributes: ["id"],
-        }),
-      ]);
+      // Build tuple comparison logic manually using raw queries for efficiency and tie-breaking on id
+      const replacements = {
+        createdAt: practice.created_at,
+        curId: practice.id,
+        search: search ? `%${search}%` : undefined,
+        category,
+        created_by: created_by ? Number(created_by) : undefined,
+        publishedFlag: filterWhere.is_published,
+      } as any;
+
+      // Dynamic WHERE fragment builder (excluding tuple comparison portion)
+      const whereFrags: string[] = [
+        "is_deleted = false",
+        "is_published = :publishedFlag",
+      ];
+      if (search) {
+        whereFrags.push("(title ILIKE :search OR description ILIKE :search)");
+      }
+      if (category) {
+        whereFrags.push(":category = ANY(categories)");
+      }
+      if (created_by) {
+        whereFrags.push("created_by = :created_by");
+      }
+      const baseWhereSql = whereFrags.join(" AND ");
+
+      // Previous (newer) item relative to descending list: created_at > current OR tie & id > current
+      const prevSql = `SELECT id FROM best_practice_contents
+        WHERE ${baseWhereSql} AND (
+          created_at > :createdAt OR (created_at = :createdAt AND id > :curId)
+        )
+        ORDER BY created_at ASC, id ASC
+        LIMIT 1`;
+      // Next (older) item: created_at < current OR tie & id < current
+      const nextSql = `SELECT id FROM best_practice_contents
+        WHERE ${baseWhereSql} AND (
+          created_at < :createdAt OR (created_at = :createdAt AND id < :curId)
+        )
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1`;
+
+      let prevItem: { id: number } | undefined;
+      let nextItem: { id: number } | undefined;
+      try {
+        const [prevRows, nextRows] = await Promise.all([
+          sequelize.query(prevSql, {
+            replacements,
+            type: QueryTypes.SELECT,
+          }) as Promise<any[]>,
+          sequelize.query(nextSql, {
+            replacements,
+            type: QueryTypes.SELECT,
+          }) as Promise<any[]>,
+        ]);
+        prevItem = (prevRows as any[])[0];
+        nextItem = (nextRows as any[])[0];
+      } catch (navErr) {
+        console.error("[bestPractices:getOne:navigationFallback]", navErr);
+        prevItem = undefined;
+        nextItem = undefined;
+      }
 
       return res.json({
         practice,
