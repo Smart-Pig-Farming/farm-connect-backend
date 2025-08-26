@@ -54,8 +54,9 @@ QuizAttemptAnswer.init(
     underscored: true,
     timestamps: true,
     indexes: [
-      { unique: true, fields: ["attempt_id", "question_id"] },
+      { fields: ["attempt_id"] },
       { fields: ["question_id"] },
+      { fields: ["attempt_id", "question_id", "option_id"] },
     ],
   }
 );

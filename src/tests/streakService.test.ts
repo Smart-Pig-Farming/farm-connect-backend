@@ -6,7 +6,11 @@ import { streakService } from "../services/scoring/StreakService";
 
 // NOTE: This is a lightweight smoke test; assumes a test DB is configured.
 
-describe("StreakService", () => {
+const skipDb = process.env.SKIP_DB_TESTS === "true";
+
+const maybeDescribe = skipDb ? describe.skip : describe;
+
+maybeDescribe("StreakService", () => {
   let user: any;
   beforeAll(async () => {
     // Ensure database connection

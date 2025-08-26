@@ -484,40 +484,231 @@ class QuizController {
       if (!req.user) return res.status(401).json({ error: "Auth required" });
       const quizId = Number(req.params.id);
       const { question_count = 10, shuffle = true } = req.body || {};
-      // Rate limit: max 5 active (unsubmitted) attempts per quiz per user
-      const recentUnsubmitted = await QuizAttempt.count({
-        where: { quiz_id: quizId, user_id: req.user.id, submitted_at: null },
+      const expectedCount = Number(question_count) || 10; // enforce minimum set size requirement
+      const now = new Date();
+      // 1. Cleanup expired in-progress attempts (mark as expired so they don't count)
+      const staleAttempts = await QuizAttempt.findAll({
+        where: {
+          quiz_id: quizId,
+          user_id: req.user.id,
+          submitted_at: null,
+          status: "in_progress",
+        },
       });
-      if (recentUnsubmitted >= 5)
+      for (const a of staleAttempts) {
+        if (a.expires_at && a.expires_at < now) {
+          await a.update({ status: "expired" });
+        }
+      }
+      // 2. Reuse existing in-progress attempt if any (idempotent start)
+      const existing = await QuizAttempt.findOne({
+        where: {
+          quiz_id: quizId,
+          user_id: req.user.id,
+          submitted_at: null,
+          status: "in_progress",
+        },
+        order: [["started_at", "DESC"]],
+      });
+      if (existing) {
+        const snapshot: any[] = Array.isArray(
+          existing.attempt_questions_snapshot
+        )
+          ? (existing.attempt_questions_snapshot as any[])
+          : [];
+        if (snapshot.length === 0) {
+          // No questions persisted somehow; expire & force fresh start
+          await existing.update({ status: "expired" });
+        } else {
+          // Reuse existing attempt even if it was a partial set (coherent UX)
+          const sanitizedQuestions = snapshot.map((q) => ({
+            id: q.id,
+            text: q.text || q.prompt,
+            prompt: q.text || q.prompt,
+            type: q.type,
+            difficulty: q.difficulty,
+            explanation: q.explanation,
+            options: (q.options || []).map((o: any) => ({
+              id: o.id,
+              text: o.text,
+            })),
+          }));
+          const requested = expectedCount;
+          const served = sanitizedQuestions.length;
+          const partial = served < requested;
+          return res.status(200).json({
+            attempt: {
+              id: existing.id,
+              quiz_id: quizId,
+              started_at: existing.started_at,
+              expires_at: existing.expires_at,
+              duration_seconds: existing.duration_seconds_snapshot,
+              status: existing.status,
+            },
+            quiz: await (async () => {
+              const quizLite = await Quiz.findByPk(quizId, {
+                attributes: ["id", "title", "description", "passing_score"],
+              });
+              return quizLite || { id: quizId };
+            })(),
+            questions: sanitizedQuestions,
+            requested_question_count: requested,
+            served_question_count: served,
+            partial_set: partial,
+            shortfall: partial ? requested - served : 0,
+            reused: true,
+          });
+        }
+      }
+      // 3. Rate limit after reuse check: max 5 active (unsubmitted) attempts per quiz per user
+      const activeCount = await QuizAttempt.count({
+        where: {
+          quiz_id: quizId,
+          user_id: req.user.id,
+          submitted_at: null,
+          status: "in_progress",
+        },
+      });
+      if (activeCount >= 5)
         return res.status(429).json({ error: "Too many active attempts" });
       const quiz = await Quiz.findByPk(quizId);
       if (!quiz || !quiz.is_active)
         return res.status(404).json({ error: "Quiz not found" });
-      // fetch active non-deleted questions
-      let questions = await QuizQuestion.findAll({
+      // Fetch active non-deleted questions (without relying on eager include to avoid intermittent empty associations)
+      const rawQuestions = await QuizQuestion.findAll({
         where: { quiz_id: quizId, is_active: true, is_deleted: false },
-        include: [{ model: QuizQuestionOption, as: "options" }],
         order: sequelize.random(),
-        limit: Math.min(50, Number(question_count) || 10),
+        limit: Math.min(50, expectedCount),
       });
-      if (shuffle) {
-        questions = questions.map((q) => {
-          const obj = q.toJSON() as any;
-          if (obj.options) obj.options.sort(() => Math.random() - 0.5);
-          return QuizQuestion.build(obj); // temporary wrapper
+      if (rawQuestions.length === 0) {
+        return res.status(409).json({
+          error: "No questions available",
+          code: "NO_QUESTIONS",
         });
       }
+      // Always fetch options in a separate query & attach them
+      const qIds = rawQuestions.map((q) => q.id);
+      // Fetch options in bulk. IMPORTANT: assign via setDataValue so toJSON includes them.
+      const optionRows = await QuizQuestionOption.findAll({
+        where: { question_id: qIds, is_deleted: false },
+        order: [
+          ["order_index", "ASC"],
+          ["id", "ASC"],
+        ],
+      });
+      const optionsByQ: Record<number, QuizQuestionOption[]> = {} as any;
+      optionRows.forEach((o: any) => {
+        if (!optionsByQ[o.question_id]) optionsByQ[o.question_id] = [];
+        optionsByQ[o.question_id].push(o);
+      });
+      for (const q of rawQuestions) {
+        // Use setDataValue so that q.toJSON() contains the injected association-like data.
+        const opts = (optionsByQ[q.id] || []).map((o: any) => {
+          const plain = o.toJSON ? o.toJSON() : { ...o };
+          return {
+            id: plain.id,
+            question_id: plain.question_id,
+            text: plain.text,
+            // Do NOT expose is_correct here (removed later anyway) but keep for snapshot build.
+            is_correct: plain.is_correct,
+            order_index: plain.order_index,
+          };
+        });
+        (q as any).setDataValue("options", opts);
+      }
+      const zeroOptionQuestions = rawQuestions.filter((q: any) => {
+        const opts =
+          (typeof q.get === "function"
+            ? (q as any).get("options")
+            : (q as any).options) || [];
+        return !Array.isArray(opts) || opts.length === 0;
+      });
+      if (zeroOptionQuestions.length) {
+        return res.status(409).json({
+          error: `Some questions have no options (ids: ${zeroOptionQuestions
+            .map((q) => q.id)
+            .join(",")})`,
+          code: "QUESTIONS_WITHOUT_OPTIONS",
+          question_ids: zeroOptionQuestions.map((q) => q.id),
+        });
+      }
+      // Allow partial sets: proceed if at least 1 question available
+      const isPartial = rawQuestions.length < expectedCount;
+      const questions = shuffle
+        ? rawQuestions.map((q) => {
+            const opts =
+              (typeof q.get === "function"
+                ? (q as any).get("options")
+                : (q as any).options) || [];
+            if (Array.isArray(opts) && opts.length > 1) {
+              const shuffled = [...opts].sort(() => Math.random() - 0.5);
+              (q as any).setDataValue("options", shuffled);
+            }
+            return q;
+          })
+        : rawQuestions;
+      // Filter out any questions with zero options (data integrity safeguard)
+      const withOptions = questions.filter((q) => {
+        const obj: any = q.toJSON();
+        return Array.isArray(obj.options) && obj.options.length > 0;
+      });
+      if (withOptions.length === 0) {
+        return res.status(409).json({
+          error: "No questions with options available",
+          code: "NO_OPTIONS",
+          requested: expectedCount,
+          available_questions: questions.length,
+        });
+      }
+      if (withOptions.length < questions.length) {
+        // Adjust served list to only those with options
+        console.warn(
+          `[quizAttempts:start] Excluding ${
+            questions.length - withOptions.length
+          } questions lacking options`
+        );
+      }
+      const finalQuestions = withOptions;
+      const servedIds = finalQuestions.map((q) => q.id);
+      const startedAt = new Date();
+      const durationSeconds = quiz.duration * 60; // quiz.duration in minutes
+      const expiresAt = new Date(startedAt.getTime() + durationSeconds * 1000);
+      // Build immutable snapshot BEFORE sanitizing
+      const snapshot = finalQuestions.map((q) => {
+        const obj: any = q.toJSON();
+        return {
+          id: obj.id,
+          text: obj.text,
+          prompt: obj.text,
+          type: obj.type,
+          difficulty: obj.difficulty,
+          explanation: obj.explanation,
+          options: (obj.options || []).map((o: any) => ({
+            id: o.id,
+            text: o.text,
+            is_correct: !!o.is_correct,
+          })),
+        };
+      });
       const attempt = await QuizAttempt.create({
         quiz_id: quizId,
         user_id: req.user.id,
-        duration_seconds_snapshot: quiz.duration * 60,
-        started_at: new Date(),
+        duration_seconds_snapshot: durationSeconds,
+        started_at: startedAt,
+        expires_at: expiresAt,
+        served_question_ids: servedIds,
+        total_questions: servedIds.length,
+        question_order: servedIds,
+        passing_score_snapshot: quiz.passing_score,
+        status: "in_progress",
+        attempt_questions_snapshot: snapshot,
       });
       // sanitize answers
-      const sanitizedQuestions = questions.map((q) => {
+      const sanitizedQuestions = finalQuestions.map((q) => {
         const obj: any = q.toJSON();
         // Provide a stable question_id alias for attempt consumption
         if (obj && obj.id && !obj.question_id) obj.question_id = obj.id;
+        if (!obj.prompt) obj.prompt = obj.text;
         if (obj.options) obj.options.forEach((o: any) => delete o.is_correct);
         return obj;
       });
@@ -526,10 +717,9 @@ class QuizController {
           id: attempt.id,
           quiz_id: quizId,
           started_at: attempt.started_at,
-          expires_at: new Date(
-            attempt.started_at.getTime() + quiz.duration * 60000
-          ),
-          duration_seconds: quiz.duration * 60,
+          expires_at: attempt.expires_at,
+          duration_seconds: durationSeconds,
+          status: attempt.status,
         },
         quiz: {
           id: quiz.id,
@@ -538,6 +728,11 @@ class QuizController {
           passing_score: quiz.passing_score,
         },
         questions: sanitizedQuestions,
+        requested_question_count: expectedCount,
+        served_question_count: sanitizedQuestions.length,
+        partial_set: isPartial,
+        shortfall: isPartial ? expectedCount - sanitizedQuestions.length : 0,
+        reused: false,
       });
     } catch (e) {
       console.error("[quizAttempts:start]", e);
@@ -568,91 +763,107 @@ class QuizController {
         attempt.started_at.getTime() + quiz.duration * 60000
       );
       const timeExceeded = now > expiry;
-      const answers: any[] = Array.isArray(req.body.answers)
+      const answersPayload: any[] = Array.isArray(req.body.answers)
         ? req.body.answers
         : [];
-      // answers: [{question_id, option_ids: []}] support multi-select: treat correct only if exact match set
-      const questionIds = answers
-        .map((a) => Number(a.question_id))
-        .filter(Boolean);
+      const servedIds: number[] = Array.isArray(attempt.served_question_ids)
+        ? (attempt.served_question_ids as any)
+        : [];
       const questions = await QuizQuestion.findAll({
-        where: { id: questionIds },
+        where: { id: servedIds },
       });
       const options = await QuizQuestionOption.findAll({
-        where: { question_id: questionIds },
+        where: { question_id: servedIds },
       });
-      // Map correctness
+      const answersByQ: Record<number, number[]> = {};
+      for (const a of answersPayload) {
+        const qid = Number(a.question_id);
+        if (!servedIds.includes(qid)) continue; // ignore invalid
+        const arr = Array.isArray(a.option_ids) ? a.option_ids.map(Number) : [];
+        answersByQ[qid] = Array.from(new Set(arr));
+      }
       let correctCount = 0;
-      let pointsAccum = 0; // partial points
-      const totalCount = questions.length;
-      for (const a of answers) {
-        const qOpts = options.filter(
-          (o) => o.question_id === Number(a.question_id)
-        );
+      const totalCount = servedIds.length;
+      for (const qid of servedIds) {
+        const qOpts = options.filter((o) => o.question_id === qid);
         const correctOpts = qOpts
           .filter((o) => o.is_correct)
           .map((o) => o.id)
           .sort();
-        const chosen = (Array.isArray(a.option_ids) ? a.option_ids : [])
-          .map(Number)
-          .sort();
-        const intersection = chosen.filter((id: number) =>
-          correctOpts.includes(id)
-        );
-        const wrongChosen = chosen.filter(
-          (id: number) => !correctOpts.includes(id)
-        );
-        const baseAllMatch =
+        const chosen = (answersByQ[qid] || []).slice().sort();
+        const allMatch =
           correctOpts.length === chosen.length &&
           correctOpts.every((id, idx) => id === chosen[idx]);
-        if (baseAllMatch) {
-          correctCount++;
-          pointsAccum += 1;
-        } else {
-          // Partial scoring: award fraction = (# correct picked / total correct) - penalty*(wrong picks)
-          if (correctOpts.length) {
-            const fraction = intersection.length / correctOpts.length;
-            const penalty = wrongChosen.length
-              ? wrongChosen.length * (1 / correctOpts.length)
-              : 0;
-            const partial = Math.max(0, fraction - penalty);
-            if (partial > 0) pointsAccum += partial;
-          }
-        }
-        // record each chosen option
+        if (allMatch) correctCount++;
+        // persist chosen selections
         for (const optId of chosen) {
           const opt = qOpts.find((o) => o.id === optId);
           if (!opt) continue;
           await QuizAttemptAnswer.create({
             attempt_id: attempt.id,
-            question_id: Number(a.question_id),
+            question_id: qid,
             option_id: optId,
             is_correct_snapshot: !!opt.is_correct,
           });
         }
       }
       const scorePercent = totalCount
-        ? Math.round((pointsAccum / totalCount) * 100)
+        ? Math.round((correctCount / totalCount) * 100)
         : 0;
       const passed = scorePercent >= quiz.passing_score;
       await attempt.update({
         submitted_at: now,
         score_raw: correctCount,
         score_percent: scorePercent,
-        score_points: pointsAccum.toFixed(3),
+        score_points: correctCount.toFixed(3),
         passed,
+        status: timeExceeded ? "expired" : "completed",
       });
+      // Construct breakdown from snapshot for immediate review
+      let breakdown: any[] = [];
+      if (Array.isArray(attempt.attempt_questions_snapshot)) {
+        const snapshotMap: Record<number, any> = {};
+        (attempt.attempt_questions_snapshot as any[]).forEach(
+          (q: any) => (snapshotMap[q.id] = q)
+        );
+        breakdown = servedIds.map((qid) => {
+          const snap = snapshotMap[qid];
+          const chosen = answersByQ[qid] || [];
+          const correctOptionIds = (snap?.options || [])
+            .filter((o: any) => o.is_correct)
+            .map((o: any) => o.id)
+            .sort();
+          const allMatch =
+            correctOptionIds.length === chosen.length &&
+            correctOptionIds.every(
+              (id: number, idx: number) => id === chosen.slice().sort()[idx]
+            );
+          return {
+            question_id: qid,
+            prompt: snap?.text,
+            type: snap?.type,
+            difficulty: snap?.difficulty,
+            explanation: snap?.explanation,
+            selected_option_ids: chosen,
+            correct_option_ids: correctOptionIds,
+            correct: allMatch,
+          };
+        });
+      }
       return res.json({
         attempt: {
           id: attempt.id,
           quiz_id: quizId,
           score_raw: correctCount,
           score_percent: scorePercent,
-          score_points: pointsAccum,
+          score_points: correctCount,
           passed,
           submitted_at: now,
           time_exceeded: timeExceeded,
+          total_questions: totalCount,
+          status: attempt.status,
         },
+        breakdown,
       });
     } catch (e) {
       console.error("[quizAttempts:submit]", e);
@@ -665,28 +876,249 @@ class QuizController {
     try {
       if (!req.user) return res.status(401).json({ error: "Auth required" });
       const { id, attemptId } = req.params as any;
-      const attempt = await QuizAttempt.findByPk(Number(attemptId), {
-        include: [
-          {
-            model: QuizAttemptAnswer,
-            as: "answers",
-            include: [
-              { model: QuizQuestionOption, as: "option" },
-              { model: QuizQuestion, as: "question" },
-            ],
-          },
-        ],
-      });
+      const attempt = await QuizAttempt.findByPk(Number(attemptId));
       if (
         !attempt ||
         attempt.quiz_id !== Number(id) ||
         attempt.user_id !== req.user.id
       )
         return res.status(404).json({ error: "Attempt not found" });
-      return res.json({ attempt });
+      // compute remaining seconds
+      const now = new Date();
+      let remaining = null;
+      if (attempt.expires_at && !attempt.submitted_at) {
+        remaining = Math.max(
+          0,
+          Math.floor((attempt.expires_at.getTime() - now.getTime()) / 1000)
+        );
+      }
+      // fetch served questions for resume
+      let questions: any[] = [];
+      if (Array.isArray(attempt.served_question_ids)) {
+        const rows = await QuizQuestion.findAll({
+          where: { id: attempt.served_question_ids },
+          include: [{ model: QuizQuestionOption, as: "options" }],
+        });
+        const orderMap: Record<number, number> = {};
+        (attempt.question_order || []).forEach(
+          (qid, idx) => (orderMap[qid] = idx)
+        );
+        rows.sort((a, b) => (orderMap[a.id] || 0) - (orderMap[b.id] || 0));
+        questions = rows.map((q) => {
+          const obj: any = q.toJSON();
+          if (obj && obj.id && !obj.question_id) obj.question_id = obj.id;
+          if (!obj.prompt) obj.prompt = obj.text;
+          if (
+            attempt.status === "in_progress" ||
+            attempt.status === "expired"
+          ) {
+            if (obj.options)
+              obj.options.forEach((o: any) => delete o.is_correct);
+          }
+          return obj;
+        });
+      }
+      // aggregate answers
+      const answerRows = await QuizAttemptAnswer.findAll({
+        where: { attempt_id: attempt.id },
+      });
+      const answers: Record<number, number[]> = {};
+      for (const r of answerRows) {
+        if (!answers[r.question_id]) answers[r.question_id] = [];
+        answers[r.question_id].push(r.option_id);
+      }
+      const base = {
+        id: attempt.id,
+        quiz_id: attempt.quiz_id,
+        started_at: attempt.started_at,
+        submitted_at: attempt.submitted_at,
+        status: attempt.status,
+        expires_at: attempt.expires_at,
+        remaining_seconds: remaining,
+        score_percent: attempt.score_percent,
+        score_raw: attempt.score_raw,
+        passed: attempt.passed,
+        total_questions: attempt.total_questions,
+      };
+      // If completed, attach breakdown for convenience (lightweight)
+      let breakdown: any[] | undefined = undefined;
+      if (
+        attempt.status !== "in_progress" &&
+        Array.isArray(attempt.attempt_questions_snapshot)
+      ) {
+        const snapshotMap: Record<number, any> = {};
+        (attempt.attempt_questions_snapshot as any[]).forEach(
+          (q: any) => (snapshotMap[q.id] = q)
+        );
+        const orderedIds =
+          attempt.question_order ||
+          Object.keys(snapshotMap).map((k) => Number(k));
+        breakdown = orderedIds
+          .map((qid: any) => {
+            const snap = snapshotMap[qid];
+            if (!snap) return null;
+            const selected = answers[qid] || [];
+            const correctOptionIds = (snap.options || [])
+              .filter((o: any) => o.is_correct)
+              .map((o: any) => o.id)
+              .sort();
+            const allMatch =
+              correctOptionIds.length === selected.length &&
+              correctOptionIds.every(
+                (id: number, idx: number) => id === selected.slice().sort()[idx]
+              );
+            return {
+              question_id: qid,
+              prompt: snap.text,
+              type: snap.type,
+              difficulty: snap.difficulty,
+              explanation: snap.explanation,
+              selected_option_ids: selected,
+              correct_option_ids: correctOptionIds,
+              correct: allMatch,
+            };
+          })
+          .filter(Boolean);
+      }
+      return res.json({ attempt: base, questions, answers, breakdown });
     } catch (e) {
       console.error("[quizAttempts:get]", e);
       return res.status(500).json({ error: "Failed to fetch attempt" });
+    }
+  }
+
+  // GET /api/quizzes/:id/attempts/:attemptId/review (explicit review endpoint)
+  async reviewAttempt(req: AuthRequest, res: Response) {
+    try {
+      if (!req.user) return res.status(401).json({ error: "Auth required" });
+      const quizId = Number(req.params.id);
+      const attemptId = Number(req.params.attemptId);
+      const attempt = await QuizAttempt.findByPk(attemptId);
+      if (
+        !attempt ||
+        attempt.quiz_id !== quizId ||
+        attempt.user_id !== req.user.id
+      )
+        return res.status(404).json({ error: "Attempt not found" });
+      if (!attempt.submitted_at)
+        return res.status(400).json({ error: "Attempt not yet submitted" });
+      const answerRows = await QuizAttemptAnswer.findAll({
+        where: { attempt_id: attempt.id },
+      });
+      const answersByQ: Record<number, number[]> = {};
+      for (const r of answerRows) {
+        if (!answersByQ[r.question_id]) answersByQ[r.question_id] = [];
+        answersByQ[r.question_id].push(r.option_id);
+      }
+      const snapshot: any[] = Array.isArray(attempt.attempt_questions_snapshot)
+        ? (attempt.attempt_questions_snapshot as any[])
+        : [];
+      const order = attempt.question_order || snapshot.map((q: any) => q.id);
+      const snapMap: Record<number, any> = {};
+      snapshot.forEach((q: any) => (snapMap[q.id] = q));
+      const breakdown = order
+        .map((qid: number) => {
+          const snap = snapMap[qid];
+          if (!snap) return null;
+          const selected = (answersByQ[qid] || []).slice().sort();
+          const correctIds = (snap.options || [])
+            .filter((o: any) => o.is_correct)
+            .map((o: any) => o.id)
+            .sort();
+          const correct =
+            correctIds.length === selected.length &&
+            correctIds.every((id: number, idx: number) => id === selected[idx]);
+          return {
+            question_id: qid,
+            prompt: snap.text,
+            type: snap.type,
+            difficulty: snap.difficulty,
+            explanation: snap.explanation,
+            selected_option_ids: selected,
+            correct_option_ids: correctIds,
+            correct,
+            options: snap.options.map((o: any) => ({
+              id: o.id,
+              text: o.text,
+              is_correct: o.is_correct,
+            })),
+          };
+        })
+        .filter(Boolean);
+      return res.json({
+        attempt: {
+          id: attempt.id,
+          quiz_id: attempt.quiz_id,
+          submitted_at: attempt.submitted_at,
+          score_percent: attempt.score_percent,
+          score_raw: attempt.score_raw,
+          total_questions: attempt.total_questions,
+          passed: attempt.passed,
+          status: attempt.status,
+        },
+        breakdown,
+      });
+    } catch (e) {
+      console.error("[quizAttempts:review]", e);
+      return res.status(500).json({ error: "Failed to review attempt" });
+    }
+  }
+
+  // PATCH /api/quizzes/:id/attempts/:attemptId/answers (incremental save)
+  async saveAttemptAnswer(req: AuthRequest, res: Response) {
+    try {
+      if (!req.user) return res.status(401).json({ error: "Auth required" });
+      const quizId = Number(req.params.id);
+      const attemptId = Number(req.params.attemptId);
+      const { question_id, selected_option_ids, option_ids } = req.body || {};
+      const attempt = await QuizAttempt.findByPk(attemptId);
+      if (
+        !attempt ||
+        attempt.quiz_id !== quizId ||
+        attempt.user_id !== req.user.id
+      )
+        return res.status(404).json({ error: "Attempt not found" });
+      if (attempt.submitted_at)
+        return res.status(400).json({ error: "Attempt already submitted" });
+      if (attempt.expires_at && new Date() > attempt.expires_at)
+        return res.status(400).json({ error: "Attempt expired" });
+      if (!Array.isArray(attempt.served_question_ids))
+        return res.status(400).json({ error: "Attempt missing question set" });
+      const qid = Number(question_id);
+      if (!qid || !attempt.served_question_ids.includes(qid))
+        return res.status(400).json({ error: "Invalid question_id" });
+      const incoming =
+        selected_option_ids !== undefined ? selected_option_ids : option_ids;
+      const optionIds: number[] = Array.isArray(incoming)
+        ? Array.from(new Set(incoming.map(Number)))
+        : [];
+      // Remove existing selections for this question
+      await QuizAttemptAnswer.destroy({
+        where: { attempt_id: attempt.id, question_id: qid },
+      });
+      if (optionIds.length) {
+        const opts = await QuizQuestionOption.findAll({
+          where: { question_id: qid },
+        });
+        for (const oid of optionIds) {
+          const opt = opts.find((o) => o.id === oid);
+          if (!opt) continue;
+          await QuizAttemptAnswer.create({
+            attempt_id: attempt.id,
+            question_id: qid,
+            option_id: oid,
+            is_correct_snapshot: !!opt.is_correct,
+          });
+        }
+      }
+      return res.json({
+        saved: true,
+        question_id: qid,
+        selected_option_ids: optionIds,
+      });
+    } catch (e) {
+      console.error("[quizAttempts:saveAnswer]", e);
+      return res.status(500).json({ error: "Failed to save answer" });
     }
   }
 

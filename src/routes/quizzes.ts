@@ -81,10 +81,20 @@ router.post(
   authenticateWithCookies,
   quizController.submitAttempt.bind(quizController)
 );
+router.patch(
+  "/:id/attempts/:attemptId/answers",
+  authenticateWithCookies,
+  quizController.saveAttemptAnswer.bind(quizController)
+);
 router.get(
   "/:id/attempts/:attemptId",
   authenticateWithCookies,
   quizController.getAttempt.bind(quizController)
+);
+router.get(
+  "/:id/attempts/:attemptId/review",
+  authenticateWithCookies,
+  quizController.reviewAttempt.bind(quizController)
 );
 router.get(
   "/:id/stats",

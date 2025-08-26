@@ -14,6 +14,13 @@ export interface QuizAttemptAttributes {
   score_percent?: number | null;
   score_points?: string | null; // stored as DECIMAL string
   passed?: boolean | null;
+  served_question_ids?: number[] | null;
+  total_questions?: number | null;
+  question_order?: number[] | null;
+  passing_score_snapshot?: number | null;
+  expires_at?: Date | null;
+  status?: "in_progress" | "completed" | "expired";
+  attempt_questions_snapshot?: any | null;
   created_at?: Date;
   updated_at?: Date;
 }
@@ -38,6 +45,13 @@ class QuizAttempt
   public score_percent?: number | null;
   public score_points?: string | null;
   public passed?: boolean | null;
+  public served_question_ids?: number[] | null;
+  public total_questions?: number | null;
+  public question_order?: number[] | null;
+  public passing_score_snapshot?: number | null;
+  public expires_at?: Date | null;
+  public status?: "in_progress" | "completed" | "expired";
+  public attempt_questions_snapshot?: any | null;
   public readonly created_at!: Date;
   public readonly updated_at!: Date;
 
@@ -64,6 +78,20 @@ QuizAttempt.init(
     score_percent: { type: DataTypes.INTEGER, allowNull: true },
     score_points: { type: DataTypes.DECIMAL(8, 3), allowNull: true },
     passed: { type: DataTypes.BOOLEAN, allowNull: true },
+    served_question_ids: { type: DataTypes.JSONB, allowNull: true },
+    total_questions: { type: DataTypes.INTEGER, allowNull: true },
+    question_order: {
+      type: DataTypes.ARRAY(DataTypes.INTEGER),
+      allowNull: true,
+    },
+    passing_score_snapshot: { type: DataTypes.INTEGER, allowNull: true },
+    expires_at: { type: DataTypes.DATE, allowNull: true },
+    status: {
+      type: DataTypes.ENUM("in_progress", "completed", "expired"),
+      allowNull: false,
+      defaultValue: "in_progress",
+    },
+    attempt_questions_snapshot: { type: DataTypes.JSONB, allowNull: true },
   },
   {
     sequelize,
