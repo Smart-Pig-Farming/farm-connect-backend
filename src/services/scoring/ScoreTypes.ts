@@ -24,6 +24,7 @@ export const Points = {
   TRICKLE_PARENT_CONTRADICT_DOWNVOTE: 1,
   TRICKLE_GRANDPARENT_CONTRADICT_DOWNVOTE: 0.5,
   TRICKLE_ROOT_CONTRADICT_DOWNVOTE: 0.25,
+  BEST_PRACTICE_FIRST_READ: 1,
 } as const;
 
 export type SemanticLabel = "supportive" | "contradictory";

@@ -5,6 +5,11 @@ import BestPracticeContent from "../models/BestPracticeContent";
 import BestPracticeRead from "../models/BestPracticeRead";
 import User from "../models/User";
 import { StorageFactory } from "../services/storage/StorageFactory";
+import scoringService from "../services/scoring/ScoringService";
+import { Points } from "../services/scoring/ScoreTypes";
+import { mapPointsToLevel } from "../services/scoring/LevelService";
+import UserScoreTotal from "../models/UserScoreTotal";
+import { getWebSocketService } from "../services/webSocketService";
 // Lazy storage instance
 let __bpStorage: any;
 function bpStorage() {
@@ -350,18 +355,21 @@ class BestPracticeController {
         /* noop */
       }
 
-      // Record read receipt (manual upsert to tolerate missing unique constraint in some envs)
+      // Record read receipt & first-read scoring (idempotent)
+      let awarded_first_read = false;
+      let user_points: number | undefined;
+      let user_level: number | undefined;
       if (req.user) {
         await sequelize.transaction(async (t: Transaction) => {
+          let firstRead = false;
           try {
-            // Try direct insert first (will succeed if no duplicate yet)
             await sequelize.query(
               `INSERT INTO best_practice_reads (best_practice_id,user_id,first_read_at,last_read_at,read_count)
                VALUES (:bpId,:uid,NOW(),NOW(),1)`,
               { replacements: { bpId: id, uid: req.user!.id }, transaction: t }
             );
+            firstRead = true;
           } catch (err: any) {
-            // If unique constraint exists and duplicate insert fails OR constraint missing (we fall back), perform update-or-insert manually
             const existing: any[] = await sequelize.query(
               `SELECT id, read_count FROM best_practice_reads WHERE best_practice_id = :bpId AND user_id = :uid FOR UPDATE`,
               {
@@ -379,7 +387,6 @@ class BestPracticeController {
                 }
               );
             } else {
-              // Insert again (race resolved by FOR UPDATE scope above)
               await sequelize.query(
                 `INSERT INTO best_practice_reads (best_practice_id,user_id,first_read_at,last_read_at,read_count)
                  VALUES (:bpId,:uid,NOW(),NOW(),1)`,
@@ -388,8 +395,8 @@ class BestPracticeController {
                   transaction: t,
                 }
               );
+              firstRead = true;
             }
-            // Attempt to (re)create unique constraint silently if missing
             await sequelize
               .query(
                 `DO $$ BEGIN
@@ -401,7 +408,6 @@ class BestPracticeController {
                      BEGIN
                        ALTER TABLE best_practice_reads ADD CONSTRAINT uniq_bp_read_user UNIQUE (best_practice_id, user_id);
                      EXCEPTION WHEN others THEN
-                       -- ignore if created concurrently
                      END;
                    END IF;
                  END $$;`,
@@ -413,6 +419,68 @@ class BestPracticeController {
             `UPDATE best_practice_contents SET read_count = read_count + 1 WHERE id = :bpId`,
             { replacements: { bpId: id }, transaction: t }
           );
+
+          if (firstRead) {
+            // Award +1 via scoring service
+            const scoringResult = await scoringService.recordEvents(
+              [
+                {
+                  userId: req.user!.id,
+                  actorUserId: req.user!.id,
+                  type: "BEST_PRACTICE_FIRST_READ",
+                  deltaPoints: Points.BEST_PRACTICE_FIRST_READ,
+                  refType: "best_practice",
+                  refId: String(id),
+                  meta: { best_practice_id: id },
+                },
+              ],
+              t
+            );
+            // Broadcast outside the transaction (after commit) using hook pattern
+            // Save minimal batch for later emit
+            const pendingBatch = scoringResult;
+            // Defer broadcasting until after transaction commit
+            (t as any).afterCommit(() => {
+              try {
+                try {
+                  getWebSocketService().broadcastScoreEvents(pendingBatch);
+                } catch (err) {
+                  console.warn(
+                    "[ws] broadcast skipped (service not ready)",
+                    err
+                  );
+                }
+              } catch (e) {
+                console.warn("[ws] failed to broadcast first-read scoring", e);
+              }
+            });
+            awarded_first_read = true;
+            const total = scoringResult.totals.find(
+              (trow) => trow.userId === req.user!.id
+            );
+            if (total) {
+              user_points = total.totalPoints / 1000; // convert from scaled
+              user_level = mapPointsToLevel(Math.floor(user_points)).level;
+            } else {
+              // fallback load
+              const existingTotal = await UserScoreTotal.findByPk(
+                req.user!.id,
+                { transaction: t }
+              );
+              if (existingTotal) {
+                user_points = existingTotal.total_points / 1000;
+                user_level = mapPointsToLevel(Math.floor(user_points)).level;
+              }
+            }
+          } else {
+            const existingTotal = await UserScoreTotal.findByPk(req.user!.id, {
+              transaction: t,
+            });
+            if (existingTotal) {
+              user_points = existingTotal.total_points / 1000;
+              user_level = mapPointsToLevel(Math.floor(user_points)).level;
+            }
+          }
         });
       }
 
@@ -441,14 +509,32 @@ class BestPracticeController {
       }
 
       // Build tuple comparison logic manually using raw queries for efficiency and tie-breaking on id
-      const replacements = {
-        createdAt: practice.created_at,
+      // Build replacements defensively; ensure createdAt always present to avoid Sequelize named replacement error
+      const replacementsRaw: Record<string, any> = {
+        createdAt:
+          (practice as any).created_at ||
+          (practice as any).get?.("created_at") ||
+          null,
         curId: practice.id,
         search: search ? `%${search}%` : undefined,
-        category,
+        category: category || undefined,
         created_by: created_by ? Number(created_by) : undefined,
         publishedFlag: filterWhere.is_published,
-      } as any;
+      };
+      if (!replacementsRaw.createdAt) {
+        // If still missing, skip navigation queries to prevent errors
+        console.warn(
+          "[bestPractices:getOne] Missing created_at on practice id=",
+          practice.id,
+          "—navigation disabled"
+        );
+      }
+      // Strip undefined so we don't accidentally pass named params not used
+      const replacements: Record<string, any> = {};
+      Object.keys(replacementsRaw).forEach((k) => {
+        if (replacementsRaw[k] !== undefined)
+          replacements[k] = replacementsRaw[k];
+      });
 
       // Dynamic WHERE fragment builder (excluding tuple comparison portion)
       const whereFrags: string[] = [
@@ -483,21 +569,26 @@ class BestPracticeController {
 
       let prevItem: { id: number } | undefined;
       let nextItem: { id: number } | undefined;
-      try {
-        const [prevRows, nextRows] = await Promise.all([
-          sequelize.query(prevSql, {
-            replacements,
-            type: QueryTypes.SELECT,
-          }) as Promise<any[]>,
-          sequelize.query(nextSql, {
-            replacements,
-            type: QueryTypes.SELECT,
-          }) as Promise<any[]>,
-        ]);
-        prevItem = (prevRows as any[])[0];
-        nextItem = (nextRows as any[])[0];
-      } catch (navErr) {
-        console.error("[bestPractices:getOne:navigationFallback]", navErr);
+      if (replacements.createdAt) {
+        try {
+          const [prevRows, nextRows] = await Promise.all([
+            sequelize.query(prevSql, {
+              replacements,
+              type: QueryTypes.SELECT,
+            }) as Promise<any[]>,
+            sequelize.query(nextSql, {
+              replacements,
+              type: QueryTypes.SELECT,
+            }) as Promise<any[]>,
+          ]);
+          prevItem = (prevRows as any[])[0];
+          nextItem = (nextRows as any[])[0];
+        } catch (navErr) {
+          console.error("[bestPractices:getOne:navigationFallback]", navErr);
+          prevItem = undefined;
+          nextItem = undefined;
+        }
+      } else {
         prevItem = undefined;
         nextItem = undefined;
       }
@@ -508,6 +599,16 @@ class BestPracticeController {
           prevId: prevItem?.id || null,
           nextId: nextItem?.id || null,
         },
+        scoring: req.user
+          ? {
+              awarded_first_read,
+              points_delta: awarded_first_read
+                ? Points.BEST_PRACTICE_FIRST_READ
+                : 0,
+              user_points: user_points ?? null,
+              user_level: user_level ?? null,
+            }
+          : null,
       });
     } catch (e) {
       console.error("[bestPractices:getOne]", e);

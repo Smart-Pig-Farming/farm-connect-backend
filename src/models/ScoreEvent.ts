@@ -16,8 +16,8 @@ export type ScoreEventType =
   | "REPORT_REJECTED_REPORTER_REWARD" // compensation to each reporter when report rejected
   | "STREAK_BONUS" // daily login streak bonus
   | "ADMIN_ADJUST" // manual adjustment
-  | "REACTION_ENGAGEMENT"; // first time a user reacts to a given target (post/reply)
-
+  | "REACTION_ENGAGEMENT" // first time a user reacts to a given target (post/reply)
+  | "BEST_PRACTICE_FIRST_READ"; // first time a user reads a best practice (awarded once per practice)
 export interface ScoreEventAttributes {
   id: string;
   user_id: number; // beneficiary of points change
