@@ -21,6 +21,7 @@ import QuizQuestion from "./QuizQuestion";
 import QuizQuestionOption from "./QuizQuestionOption";
 import QuizAttempt from "./QuizAttempt";
 import QuizAttemptAnswer from "./QuizAttemptAnswer";
+import QuizTagAssignment from "./QuizTagAssignment";
 import { PasswordResetToken } from "./PasswordResetToken";
 // Discussions system models
 import DiscussionPost from "./DiscussionPost";
@@ -184,6 +185,7 @@ BestPracticeContent.belongsTo(User, {
 Quiz.belongsTo(User, { foreignKey: "created_by", as: "creator" });
 User.hasMany(Quiz, { foreignKey: "created_by", as: "createdQuizzes" });
 
+// Primary category (legacy one-to-many retained)
 Quiz.belongsTo(BestPracticeTag, {
   foreignKey: "best_practice_tag_id",
   as: "bestPracticeTag",
@@ -191,6 +193,20 @@ Quiz.belongsTo(BestPracticeTag, {
 BestPracticeTag.hasMany(Quiz, {
   foreignKey: "best_practice_tag_id",
   as: "quizzes",
+});
+
+// New many-to-many quiz <-> tags (additional categories)
+Quiz.belongsToMany(BestPracticeTag, {
+  through: QuizTagAssignment,
+  foreignKey: "quiz_id",
+  otherKey: "tag_id",
+  as: "tags",
+});
+BestPracticeTag.belongsToMany(Quiz, {
+  through: QuizTagAssignment,
+  foreignKey: "tag_id",
+  otherKey: "quiz_id",
+  as: "taggedQuizzes",
 });
 
 // Quiz questions
@@ -441,6 +457,7 @@ export {
   ScoreEvent,
   UserScoreTotal,
   ReplyAncestry,
+  QuizTagAssignment,
 };
 
 // Export the sequelize instance as default

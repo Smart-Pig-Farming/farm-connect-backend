@@ -4,10 +4,39 @@ import sequelize from "../config/database";
 import Quiz from "../models/Quiz";
 import User from "../models/User";
 import BestPracticeTag from "../models/BestPracticeTag";
+import QuizTagAssignment from "../models/QuizTagAssignment";
 import QuizQuestion from "../models/QuizQuestion";
 import QuizQuestionOption from "../models/QuizQuestionOption";
 import QuizAttempt from "../models/QuizAttempt";
 import QuizAttemptAnswer from "../models/QuizAttemptAnswer";
+
+// Runtime cache for presence of quiz_tag_assignments.is_primary column
+let isPrimaryAvailable: boolean | undefined;
+export function getIsPrimaryAvailable() {
+  return isPrimaryAvailable === true;
+}
+export function setIsPrimaryAvailable(val: boolean) {
+  isPrimaryAvailable = val;
+}
+async function ensureIsPrimaryColumn(): Promise<boolean> {
+  if (isPrimaryAvailable !== undefined) return isPrimaryAvailable;
+  try {
+    // Lightweight probe; will throw if column missing
+    await sequelize.query(
+      "SELECT is_primary FROM quiz_tag_assignments LIMIT 1;",
+      { type: QueryTypes.SELECT }
+    );
+    isPrimaryAvailable = true;
+  } catch (e: any) {
+    if (/column\s+"is_primary"\s+does not exist/i.test(e.message || "")) {
+      isPrimaryAvailable = false;
+    } else {
+      // For other errors (e.g. table empty) assume available to avoid masking issues
+      isPrimaryAvailable = true;
+    }
+  }
+  return isPrimaryAvailable;
+}
 
 interface AuthRequest extends Request {
   user?: { id: number; email: string; role: string; permissions: string[] };
@@ -35,17 +64,27 @@ class QuizController {
   async stats(_req: AuthRequest, res: Response) {
     try {
       const rows = await sequelize.query(
-        `SELECT t.id as tag_id, t.name as tag_name,
-                COUNT(DISTINCT q.id)::int as quiz_count,
-                COALESCE(SUM(qc.question_count),0)::int as question_count
-         FROM best_practice_tags t
-         LEFT JOIN quizzes q ON q.best_practice_tag_id = t.id AND q.is_active = true
-         LEFT JOIN LATERAL (
-           SELECT quiz_id, COUNT(*) as question_count
-           FROM quiz_questions qq WHERE qq.quiz_id = q.id GROUP BY quiz_id
-         ) qc ON qc.quiz_id = q.id
-         GROUP BY t.id, t.name
-         ORDER BY t.name ASC`,
+        `WITH quiz_tags AS (
+        SELECT q.id AS quiz_id, q.best_practice_tag_id AS tag_id
+        FROM quizzes q
+        WHERE q.is_active = true
+        UNION
+        SELECT qta.quiz_id, qta.tag_id
+        FROM quiz_tag_assignments qta
+        JOIN quizzes q2 ON q2.id = qta.quiz_id AND q2.is_active = true
+      ), quiz_question_counts AS (
+        SELECT qq.quiz_id, COUNT(*)::int AS question_count
+        FROM quiz_questions qq
+        GROUP BY qq.quiz_id
+      )
+      SELECT t.id AS tag_id, t.name AS tag_name,
+           COUNT(DISTINCT qt.quiz_id)::int AS quiz_count,
+           COALESCE(SUM(qqc.question_count),0)::int AS question_count
+      FROM best_practice_tags t
+      LEFT JOIN quiz_tags qt ON qt.tag_id = t.id
+      LEFT JOIN quiz_question_counts qqc ON qqc.quiz_id = qt.quiz_id
+      GROUP BY t.id, t.name
+      ORDER BY t.name ASC`,
         { type: QueryTypes.SELECT }
       );
       return res.json({ tags: rows });
@@ -65,20 +104,93 @@ class QuizController {
         duration,
         passing_score,
         best_practice_tag_id,
+        tag_ids, // NEW preferred: full tag id array (includes primary)
+        primary_tag_id, // optional explicit primary (must be in tag_ids)
       } = req.body;
-      if (!title || !description || !best_practice_tag_id) {
-        return res
-          .status(400)
-          .json({ error: "title, description, best_practice_tag_id required" });
+      // Backward compatibility: allow legacy best_practice_tag_id only flow.
+      // New contract: tag_ids (array, >=1) + optional primary_tag_id; if omitted, first tag_ids[0] is primary.
+      let resolvedPrimary = Number(primary_tag_id || best_practice_tag_id);
+      let resolvedAll: number[] = Array.isArray(tag_ids)
+        ? tag_ids
+            .map((n: any) => Number(n))
+            .filter((n: number) => !Number.isNaN(n))
+        : [];
+      if (resolvedAll.length === 0 && best_practice_tag_id) {
+        resolvedAll = [Number(best_practice_tag_id)];
       }
+      if (
+        !title ||
+        !description ||
+        resolvedAll.length === 0 ||
+        !resolvedPrimary
+      ) {
+        return res.status(400).json({
+          error:
+            "title, description and at least one tag (tag_ids or best_practice_tag_id) required",
+        });
+      }
+      if (!resolvedAll.includes(resolvedPrimary)) {
+        resolvedAll.unshift(resolvedPrimary);
+      }
+      // De-duplicate & sanitize
+      resolvedAll = Array.from(
+        new Set(resolvedAll.filter((n) => n && !Number.isNaN(n)))
+      );
+      resolvedPrimary = resolvedPrimary || resolvedAll[0];
       const quiz = await Quiz.create({
         title: String(title).trim(),
         description: String(description),
-        duration: duration ? Number(duration) : 30,
+        duration: duration ? Number(duration) : 10,
         passing_score: passing_score ? Number(passing_score) : 70,
-        best_practice_tag_id: Number(best_practice_tag_id),
+        best_practice_tag_id: Number(resolvedPrimary), // keep legacy column in sync
         created_by: req.user.id,
       });
+      // Insert tag assignments (gracefully handle environments where migration 047 not applied yet)
+      const ensureIsPrimaryChecked = await ensureIsPrimaryColumn();
+      const bulkRows = resolvedAll.map((tid) => ({
+        quiz_id: quiz.id,
+        tag_id: tid,
+        ...(ensureIsPrimaryChecked
+          ? { is_primary: tid === resolvedPrimary }
+          : {}),
+      }));
+      for (const row of bulkRows) {
+        try {
+          await QuizTagAssignment.upsert(
+            row as any,
+            { conflictFields: ["quiz_id", "tag_id"] } as any
+          );
+        } catch (err: any) {
+          if (
+            ensureIsPrimaryChecked &&
+            /column\s+"is_primary"\s+of\s+relation/i.test(err.message || "")
+          ) {
+            // Column disappeared between check & write – retry without field
+            const { is_primary, ...rest } = row as any;
+            await QuizTagAssignment.upsert(rest, {
+              conflictFields: ["quiz_id", "tag_id"],
+            } as any);
+          } else if (
+            /column\s+"is_primary"\s+of\s+relation/i.test(err.message || "")
+          ) {
+            // First indication column missing – mark cache false and retry
+            setIsPrimaryAvailable(false);
+            const { is_primary, ...rest } = row as any;
+            await QuizTagAssignment.upsert(rest, {
+              conflictFields: ["quiz_id", "tag_id"],
+            } as any);
+          } else {
+            throw err;
+          }
+        }
+      }
+      if (getIsPrimaryAvailable()) {
+        // Ensure only one primary (in case of race) – DB partial unique index helps but add safeguard
+        await QuizTagAssignment.update(
+          { is_primary: false },
+          { where: { quiz_id: quiz.id, tag_id: { [Op.ne]: resolvedPrimary } } }
+        );
+      }
       return res.status(201).json({ quiz });
     } catch (e) {
       console.error("[quizzes:create]", e);
@@ -89,7 +201,14 @@ class QuizController {
   // GET /api/quizzes (cursor pagination by created_at DESC)
   async list(req: AuthRequest, res: Response) {
     try {
-      const { limit = 10, cursor, search = "", tag_id, active } = req.query;
+      const {
+        limit = 10,
+        cursor,
+        search = "",
+        tag_id,
+        any_tag_id,
+        active,
+      } = req.query as any;
       const limitNum = Math.min(50, Number(limit) || 10);
       const useCursor = Object.prototype.hasOwnProperty.call(
         req.query,
@@ -102,31 +221,110 @@ class QuizController {
           { description: { [Op.iLike]: `%${search}%` } },
         ];
       }
-      if (tag_id) where.best_practice_tag_id = Number(tag_id);
-      if (active !== undefined) where.is_active = active === "true";
+      if (tag_id) where.best_practice_tag_id = Number(tag_id); // legacy primary-only filter
+      if (active !== undefined) {
+        const activeVal =
+          active === true ||
+          active === "true" ||
+          active === 1 ||
+          active === "1";
+        where.is_active = activeVal;
+      }
       if (cursor && typeof cursor === "string" && cursor.trim()) {
         where.created_at = { [Op.lt]: new Date(cursor) };
       }
-      const rows = await Quiz.findAll({
-        where,
-        order: [
-          ["created_at", "DESC"],
-          ["id", "DESC"],
-        ],
-        limit: useCursor ? limitNum + 1 : limitNum,
-        include: [
-          {
-            model: User,
-            as: "creator",
-            attributes: ["id", "firstname", "lastname"],
+      let rows;
+      if (any_tag_id) {
+        // Inclusive filter: any tag assignment OR primary tag match
+        const tagNum = Number(any_tag_id);
+        const clauses: string[] = [
+          "(q.best_practice_tag_id = :tid OR qta.tag_id = :tid)",
+        ];
+        const activeVal =
+          active === true ||
+          active === "true" ||
+          active === 1 ||
+          active === "1";
+        if (active !== undefined) clauses.push("q.is_active = :isActive");
+        if (search)
+          clauses.push(
+            "(q.title ILIKE :search OR q.description ILIKE :search)"
+          );
+        if (cursor && typeof cursor === "string" && cursor.trim())
+          clauses.push("q.created_at < :cursorDate");
+        // Include created_at in SELECT to satisfy PostgreSQL DISTINCT + ORDER BY requirements
+        const sql = `SELECT DISTINCT q.id, q.created_at FROM quizzes q
+          LEFT JOIN quiz_tag_assignments qta ON qta.quiz_id = q.id
+          WHERE ${clauses.join(" AND ")}
+          ORDER BY q.created_at DESC, q.id DESC
+          LIMIT :limitPlus`;
+        const quizIds = await sequelize.query(sql, {
+          replacements: {
+            tid: tagNum,
+            isActive: active !== undefined ? activeVal : undefined,
+            search: search ? `%${search}%` : undefined,
+            cursorDate:
+              cursor && typeof cursor === "string" && cursor.trim()
+                ? cursor
+                : undefined,
+            limitPlus: useCursor ? limitNum + 1 : limitNum,
           },
-          {
-            model: BestPracticeTag,
-            as: "bestPracticeTag",
-            attributes: ["id", "name"],
-          },
-        ],
-      });
+          type: QueryTypes.SELECT,
+        });
+        const ids = (quizIds as any[]).map((r) => r.id);
+        rows = await Quiz.findAll({
+          where: { id: ids },
+          order: [
+            ["created_at", " DESC".trim()],
+            ["id", "DESC"],
+          ],
+          include: [
+            {
+              model: User,
+              as: "creator",
+              attributes: ["id", "firstname", "lastname"],
+            },
+            {
+              model: BestPracticeTag,
+              as: "bestPracticeTag",
+              attributes: ["id", "name"],
+            },
+            {
+              model: BestPracticeTag,
+              as: "tags",
+              attributes: ["id", "name"],
+              through: { attributes: [] },
+            },
+          ],
+        });
+      } else {
+        rows = await Quiz.findAll({
+          where,
+          order: [
+            ["created_at", "DESC"],
+            ["id", "DESC"],
+          ],
+          limit: useCursor ? limitNum + 1 : limitNum,
+          include: [
+            {
+              model: User,
+              as: "creator",
+              attributes: ["id", "firstname", "lastname"],
+            },
+            {
+              model: BestPracticeTag,
+              as: "bestPracticeTag",
+              attributes: ["id", "name"],
+            },
+            {
+              model: BestPracticeTag,
+              as: "tags",
+              attributes: ["id", "name"],
+              through: { attributes: [] },
+            },
+          ],
+        });
+      }
       let items = rows;
       let hasNextPage = false;
       let nextCursor: string | null = null;
@@ -165,6 +363,12 @@ class QuizController {
             model: BestPracticeTag,
             as: "bestPracticeTag",
             attributes: ["id", "name"],
+          },
+          {
+            model: BestPracticeTag,
+            as: "tags",
+            attributes: ["id", "name"],
+            through: { attributes: [] },
           },
           {
             model: QuizQuestion,
@@ -213,6 +417,43 @@ class QuizController {
       const patch: any = {};
       for (const k of allowed) if (k in req.body) patch[k] = req.body[k];
       await quiz.update(patch);
+      // Optional replace tag assignments if tag_ids provided (new multi-tag contract)
+      if (Array.isArray(req.body.tag_ids)) {
+        let incoming: number[] = req.body.tag_ids
+          .map((n: any) => Number(n))
+          .filter((n: number) => n && !Number.isNaN(n));
+        incoming = Array.from(new Set(incoming));
+        if (incoming.length === 0) {
+          return res
+            .status(400)
+            .json({ error: "tag_ids must include at least one tag" });
+        }
+        let primary = Number(
+          req.body.primary_tag_id || quiz.best_practice_tag_id
+        );
+        if (!incoming.includes(primary)) primary = incoming[0];
+        // Keep legacy column in sync if changed
+        if (primary !== quiz.best_practice_tag_id) {
+          await quiz.update({ best_practice_tag_id: primary });
+        }
+        // Replace strategy inside transaction for consistency
+        await sequelize.transaction(async (t) => {
+          await QuizTagAssignment.destroy({
+            where: { quiz_id: quiz.id },
+            transaction: t,
+          });
+          for (const tag_id of incoming) {
+            await QuizTagAssignment.create(
+              {
+                quiz_id: quiz.id,
+                tag_id,
+                is_primary: tag_id === primary,
+              } as any,
+              { transaction: t }
+            );
+          }
+        });
+      }
       return res.json({ quiz });
     } catch (e) {
       console.error("[quizzes:update]", e);
@@ -382,6 +623,119 @@ class QuizController {
     } catch (e) {
       console.error("[quizQuestions:list]", e);
       return res.status(500).json({ error: "Failed to list questions" });
+    }
+  }
+
+  // GET /api/quizzes/questions/by-tag?tag_id= & any_tag_id=
+  async listQuestionsByTag(req: AuthRequest, res: Response) {
+    try {
+      const {
+        tag_id,
+        any_tag_id,
+        limit = 20,
+        offset = 0,
+        search = "",
+        difficulty,
+        type,
+      } = req.query as any;
+      const tagFilter = any_tag_id || tag_id;
+      if (!tagFilter) {
+        return res.status(400).json({ error: "tag_id or any_tag_id required" });
+      }
+      const tagNum = Number(tagFilter);
+      if (!tagNum) return res.status(400).json({ error: "Invalid tag id" });
+      // Collect quiz IDs inclusive when any_tag_id provided else primary only when tag_id provided
+      let quizIds: number[] = [];
+      if (any_tag_id) {
+        const rows = await sequelize.query(
+          `SELECT DISTINCT q.id FROM quizzes q
+           LEFT JOIN quiz_tag_assignments qta ON qta.quiz_id = q.id
+           WHERE (q.best_practice_tag_id = :tid OR qta.tag_id = :tid)`,
+          { replacements: { tid: tagNum }, type: QueryTypes.SELECT }
+        );
+        quizIds = (rows as any[]).map((r) => r.id);
+      } else {
+        const rows = await Quiz.findAll({
+          where: { best_practice_tag_id: tagNum },
+          attributes: ["id"],
+        });
+        quizIds = rows.map((r) => r.id as number);
+      }
+      if (quizIds.length === 0)
+        return res.json({
+          items: [],
+          pageInfo: {
+            total: 0,
+            limit: Number(limit) || 20,
+            offset: Number(offset) || 0,
+            hasNextPage: false,
+            nextOffset: null,
+          },
+        });
+      const limitNum = Math.min(200, Number(limit) || 20);
+      const offsetNum = Math.max(0, Number(offset) || 0);
+      const where: any = { quiz_id: { [Op.in]: quizIds } };
+      if (difficulty) {
+        const diffs = String(difficulty)
+          .split(",")
+          .map((d) => d.trim())
+          .filter(Boolean);
+        if (diffs.length === 1) where.difficulty = diffs[0];
+        else if (diffs.length > 1) where.difficulty = { [Op.in]: diffs };
+      }
+      if (type) {
+        let types = String(type)
+          .split(",")
+          .map((t) => t.trim())
+          .filter(Boolean)
+          .map((t) => (t === "boolean" ? "truefalse" : t));
+        if (types.length === 1) where.type = types[0];
+        else if (types.length > 1) where.type = { [Op.in]: types };
+      }
+      if (search && typeof search === "string" && search.trim()) {
+        where[Op.or] = [
+          { text: { [Op.iLike]: `%${search.trim()}%` } },
+          { explanation: { [Op.iLike]: `%${search.trim()}%` } },
+        ];
+      }
+      const total = await QuizQuestion.count({ where });
+      const items = await QuizQuestion.findAll({
+        where,
+        order: [
+          ["quiz_id", "ASC"],
+          ["order_index", "ASC"],
+          ["id", "ASC"],
+        ],
+        limit: limitNum,
+        offset: offsetNum,
+        include: [{ model: QuizQuestionOption, as: "options" }],
+      });
+      const canSeeAnswers = req.user?.permissions?.some(
+        (p) => p.includes("MANAGE:QUIZZES") || p.includes("UPDATE:QUIZZES")
+      );
+      const sanitized = items.map((q) => {
+        const obj: any = q.toJSON();
+        if (obj && obj.id && !obj.question_id) obj.question_id = obj.id;
+        if (!canSeeAnswers && obj.options) {
+          for (const o of obj.options) delete o.is_correct;
+        }
+        return obj;
+      });
+      const nextOffset = offsetNum + items.length;
+      const hasMore = nextOffset < total;
+      return res.json({
+        items: sanitized,
+        pageInfo: {
+          total,
+          limit: limitNum,
+          offset: offsetNum,
+          hasNextPage: hasMore,
+          nextOffset: hasMore ? nextOffset : null,
+        },
+      });
+    } catch (e) {
+      console.error("[quizQuestions:listByTag]", e);
+      return res.status(500).json({ error: "Failed to list questions by tag" });
     }
   }
 

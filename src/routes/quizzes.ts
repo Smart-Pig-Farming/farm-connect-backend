@@ -63,6 +63,12 @@ router.get(
   optionalAuth,
   quizController.listQuestions.bind(quizController)
 );
+// Aggregate questions across all quizzes for a tag (inclusive if any_tag_id provided)
+router.get(
+  "/questions/by-tag",
+  optionalAuth,
+  quizController.listQuestionsByTag.bind(quizController)
+);
 
 // Standalone question operations
 router.get(
