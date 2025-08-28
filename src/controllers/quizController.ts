@@ -14,6 +14,16 @@ interface AuthRequest extends Request {
 }
 
 class QuizController {
+  // Helper to compare selected vs correct option id sets (exact match + overlap count)
+  private evaluateSelection(selectedRaw: number[] | undefined, correctRaw: number[]) {
+    const selected = Array.from(new Set((selectedRaw || []).map(Number)))
+      .sort((a: number, b: number) => a - b);
+    const correct = Array.from(new Set(correctRaw.map(Number)))
+      .sort((a: number, b: number) => a - b);
+    const overlap = selected.filter(id => correct.includes(id)).length;
+    const exact = selected.length === correct.length && correct.every((id,i)=>id===selected[i]);
+    return { exact, overlap, selected, correct };
+  }
   // GET /api/quizzes/stats -> counts per tag (active quizzes & total questions)
   async stats(_req: AuthRequest, res: Response) {
     try {
@@ -786,17 +796,11 @@ class QuizController {
       const totalCount = servedIds.length;
       for (const qid of servedIds) {
         const qOpts = options.filter((o) => o.question_id === qid);
-        const correctOpts = qOpts
-          .filter((o) => o.is_correct)
-          .map((o) => o.id)
-          .sort();
-        const chosen = (answersByQ[qid] || []).slice().sort();
-        const allMatch =
-          correctOpts.length === chosen.length &&
-          correctOpts.every((id, idx) => id === chosen[idx]);
-        if (allMatch) correctCount++;
+        const correctOpts = qOpts.filter(o=>o.is_correct).map(o=>o.id);
+        const { exact } = this.evaluateSelection(answersByQ[qid], correctOpts);
+        if (exact) correctCount++;
         // persist chosen selections
-        for (const optId of chosen) {
+        for (const optId of (answersByQ[qid] || [])) {
           const opt = qOpts.find((o) => o.id === optId);
           if (!opt) continue;
           await QuizAttemptAnswer.create({
@@ -829,25 +833,19 @@ class QuizController {
         breakdown = servedIds.map((qid) => {
           const snap = snapshotMap[qid];
           const chosen = answersByQ[qid] || [];
-          const correctOptionIds = (snap?.options || [])
-            .filter((o: any) => o.is_correct)
-            .map((o: any) => o.id)
-            .sort();
-          const allMatch =
-            correctOptionIds.length === chosen.length &&
-            correctOptionIds.every(
-              (id: number, idx: number) => id === chosen.slice().sort()[idx]
-            );
-          return {
-            question_id: qid,
-            prompt: snap?.text,
-            type: snap?.type,
-            difficulty: snap?.difficulty,
-            explanation: snap?.explanation,
-            selected_option_ids: chosen,
-            correct_option_ids: correctOptionIds,
-            correct: allMatch,
-          };
+            const correctOptionIds = (snap?.options || []).filter((o:any)=>o.is_correct).map((o:any)=>o.id);
+            const { exact, overlap } = this.evaluateSelection(chosen, correctOptionIds);
+            return {
+              question_id: qid,
+              prompt: snap?.text,
+              type: snap?.type,
+              difficulty: snap?.difficulty,
+              explanation: snap?.explanation,
+              selected_option_ids: chosen,
+              correct_option_ids: correctOptionIds.sort((a: number, b: number) => a - b),
+              correct: exact,
+              partial: !exact && overlap>0,
+            };
         });
       }
       return res.json({
@@ -958,15 +956,8 @@ class QuizController {
             const snap = snapshotMap[qid];
             if (!snap) return null;
             const selected = answers[qid] || [];
-            const correctOptionIds = (snap.options || [])
-              .filter((o: any) => o.is_correct)
-              .map((o: any) => o.id)
-              .sort();
-            const allMatch =
-              correctOptionIds.length === selected.length &&
-              correctOptionIds.every(
-                (id: number, idx: number) => id === selected.slice().sort()[idx]
-              );
+            const correctOptionIds = (snap.options || []).filter((o:any)=>o.is_correct).map((o:any)=>o.id);
+            const { exact, overlap } = this.evaluateSelection(selected, correctOptionIds);
             return {
               question_id: qid,
               prompt: snap.text,
@@ -974,8 +965,9 @@ class QuizController {
               difficulty: snap.difficulty,
               explanation: snap.explanation,
               selected_option_ids: selected,
-              correct_option_ids: correctOptionIds,
-              correct: allMatch,
+              correct_option_ids: correctOptionIds.sort((a: number, b: number) => a - b),
+              correct: exact,
+              partial: !exact && overlap>0,
             };
           })
           .filter(Boolean);
@@ -1020,23 +1012,21 @@ class QuizController {
         .map((qid: number) => {
           const snap = snapMap[qid];
           if (!snap) return null;
-          const selected = (answersByQ[qid] || []).slice().sort();
-          const correctIds = (snap.options || [])
-            .filter((o: any) => o.is_correct)
-            .map((o: any) => o.id)
-            .sort();
-          const correct =
-            correctIds.length === selected.length &&
-            correctIds.every((id: number, idx: number) => id === selected[idx]);
+          const selected = (answersByQ[qid] || []);
+          const correctIds = (snap.options || []).filter((o:any)=>o.is_correct).map((o:any)=>o.id);
+          const { exact, overlap } = this.evaluateSelection(selected, correctIds);
           return {
             question_id: qid,
             prompt: snap.text,
             type: snap.type,
             difficulty: snap.difficulty,
             explanation: snap.explanation,
-            selected_option_ids: selected,
-            correct_option_ids: correctIds,
-            correct,
+            selected_option_ids: Array.from(new Set(selected as number[]))
+              .sort((a: number, b: number) => a - b),
+            correct_option_ids: Array.from(new Set(correctIds as number[]))
+              .sort((a: number, b: number) => a - b),
+            correct: exact,
+            partial: !exact && overlap>0,
             options: snap.options.map((o: any) => ({
               id: o.id,
               text: o.text,
