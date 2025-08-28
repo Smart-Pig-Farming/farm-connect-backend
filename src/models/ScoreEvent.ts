@@ -17,7 +17,9 @@ export type ScoreEventType =
   | "STREAK_BONUS" // daily login streak bonus
   | "ADMIN_ADJUST" // manual adjustment
   | "REACTION_ENGAGEMENT" // first time a user reacts to a given target (post/reply)
-  | "BEST_PRACTICE_FIRST_READ"; // first time a user reads a best practice (awarded once per practice)
+  | "BEST_PRACTICE_FIRST_READ" // first time a user reads a best practice (awarded once per practice)
+  | "QUIZ_COMPLETED_PASS" // user completed a quiz with >= threshold (70%)
+  | "QUIZ_COMPLETED_FAIL"; // user completed a quiz below threshold
 export interface ScoreEventAttributes {
   id: string;
   user_id: number; // beneficiary of points change

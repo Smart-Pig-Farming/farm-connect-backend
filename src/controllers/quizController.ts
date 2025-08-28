@@ -862,6 +862,63 @@ class QuizController {
           };
         });
       }
+      // Scoring: award quiz completion points
+      let scoring: any = null;
+      try {
+        const { Points } = await import("../services/scoring/ScoreTypes");
+        const scoringService = (
+          await import("../services/scoring/ScoringService")
+        ).default;
+        const { mapPointsToLevel } = await import(
+          "../services/scoring/LevelService"
+        );
+        const { getWebSocketService } = await import(
+          "../services/webSocketService"
+        );
+        const delta = passed
+          ? Points.QUIZ_COMPLETED_PASS
+          : Points.QUIZ_COMPLETED_FAIL;
+        const eventType = passed
+          ? "QUIZ_COMPLETED_PASS"
+          : "QUIZ_COMPLETED_FAIL";
+        const batch = await scoringService.recordEvents([
+          {
+            userId: req.user.id,
+            actorUserId: req.user.id,
+            type: eventType as any,
+            deltaPoints: delta,
+            refType: "quiz_attempt",
+            refId: String(attempt.id),
+            meta: {
+              quiz_id: quizId,
+              attempt_id: attempt.id,
+              percent: scorePercent,
+            },
+          },
+        ]);
+        // Broadcast
+        try {
+          getWebSocketService().broadcastScoreEvents(batch);
+        } catch (e) {
+          console.warn("[quizAttempts:submit][ws] not initialized", e);
+        }
+        const total = batch.totals.find((t) => t.userId === req.user!.id);
+        if (total) {
+          const totalPointsUnscaled = total.totalPoints / 1000;
+          const lvlInfo = mapPointsToLevel(Math.floor(totalPointsUnscaled));
+          scoring = {
+            points_delta: delta,
+            user_points: totalPointsUnscaled,
+            user_level: lvlInfo.level,
+            level_label: lvlInfo.label,
+            next_level_at: lvlInfo.nextLevelAt,
+            awarded_event_type: eventType,
+          };
+        }
+      } catch (scErr) {
+        console.warn("[quizAttempts:submit][scoring] failed", scErr);
+      }
+
       return res.json({
         attempt: {
           id: attempt.id,
@@ -876,6 +933,7 @@ class QuizController {
           status: attempt.status,
         },
         breakdown,
+        scoring,
       });
     } catch (e) {
       console.error("[quizAttempts:submit]", e);
