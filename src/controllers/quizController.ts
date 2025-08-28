@@ -485,7 +485,8 @@ class QuizController {
       const quizId = Number(req.params.quizId);
       const quiz = await Quiz.findByPk(quizId);
       if (!quiz) return res.status(404).json({ error: "Quiz not found" });
-      const { text, explanation, order_index, options } = req.body;
+      const { text, explanation, order_index, options, type, difficulty } =
+        req.body;
       if (!text) return res.status(400).json({ error: "text required" });
       let opts: any[] = [];
       if (Array.isArray(options)) opts = options;
@@ -498,6 +499,22 @@ class QuizController {
       if (!opts.length)
         return res.status(400).json({ error: "At least one option required" });
       const correctCount = opts.filter((o) => !!o.is_correct).length;
+      const qType: string =
+        typeof type === "string" ? type.toLowerCase() : "mcq";
+      if (!["mcq", "multi", "truefalse"].includes(qType))
+        return res.status(400).json({ error: "Invalid type" });
+      if (qType === "mcq" && correctCount !== 1)
+        return res
+          .status(400)
+          .json({ error: "MCQ must have exactly one correct option" });
+      if (qType === "multi" && correctCount < 2)
+        return res.status(400).json({
+          error: "Multi-select must have at least two correct options",
+        });
+      if (qType === "truefalse" && correctCount !== 1)
+        return res
+          .status(400)
+          .json({ error: "True/False must have exactly one correct option" });
       if (correctCount === 0)
         return res
           .status(400)
@@ -507,8 +524,10 @@ class QuizController {
         text: String(text),
         explanation: explanation ? String(explanation) : null,
         order_index: order_index ? Number(order_index) : 0,
-        type: "mcq",
-        difficulty: "medium",
+        type: qType as any,
+        difficulty: ["easy", "medium", "hard"].includes(difficulty)
+          ? difficulty
+          : "medium",
         is_active: true,
         is_deleted: false,
       });
@@ -805,20 +824,69 @@ class QuizController {
             if (Array.isArray(parsed)) opts = parsed;
           } catch {}
         }
-        // Remove existing options then re-create (simpler initial approach)
-        await QuizQuestionOption.destroy({
-          where: { question_id: question.id },
-        });
-        for (const [i, o] of opts.entries()) {
-          if (!o || typeof o.text !== "string") continue;
-          await QuizQuestionOption.create({
-            question_id: question.id,
-            text: o.text,
-            is_correct: !!o.is_correct,
-            order_index: typeof o.order_index === "number" ? o.order_index : i,
-            is_deleted: false,
+        // Enforce correct answer count rules based on (possibly updated) type
+        const newType = patch.type || question.type;
+        const newCorrect = opts.filter((o) => !!o.is_correct).length;
+        if (newType === "mcq" && newCorrect !== 1)
+          return res
+            .status(400)
+            .json({ error: "MCQ must have exactly one correct option" });
+        if (newType === "multi" && newCorrect < 2)
+          return res.status(400).json({
+            error: "Multi-select must have at least two correct options",
           });
-        }
+        if (newType === "truefalse" && newCorrect !== 1)
+          return res
+            .status(400)
+            .json({ error: "True/False must have exactly one correct option" });
+        // Safer replace strategy: update/create; soft-delete removed options to preserve FK integrity
+        await sequelize.transaction(async (t) => {
+          const existing = await QuizQuestionOption.findAll({
+            where: { question_id: question.id },
+            transaction: t,
+          });
+          const existingMap = new Map<number, any>();
+          existing.forEach((eo: any) => existingMap.set(eo.id, eo));
+          const seenIds = new Set<number>();
+          for (const [i, o] of opts.entries()) {
+            if (!o || typeof o.text !== "string") continue;
+            const ord = typeof o.order_index === "number" ? o.order_index : i;
+            if (o.id && existingMap.has(Number(o.id))) {
+              const row = existingMap.get(Number(o.id));
+              await row.update(
+                {
+                  text: o.text,
+                  is_correct: !!o.is_correct,
+                  order_index: ord,
+                  is_deleted: false, // resurrect if was soft-deleted
+                },
+                { transaction: t }
+              );
+              seenIds.add(Number(o.id));
+            } else {
+              await QuizQuestionOption.create(
+                {
+                  question_id: question.id,
+                  text: o.text,
+                  is_correct: !!o.is_correct,
+                  order_index: ord,
+                  is_deleted: false,
+                },
+                { transaction: t }
+              );
+            }
+          }
+          // Soft delete options not present in new list
+          const toSoftDelete = existing
+            .filter((eo: any) => !seenIds.has(eo.id))
+            .map((eo: any) => eo.id);
+          if (toSoftDelete.length) {
+            await QuizQuestionOption.update(
+              { is_deleted: true },
+              { where: { id: toSoftDelete }, transaction: t }
+            );
+          }
+        });
       }
       const full = await QuizQuestion.findByPk(question.id, {
         include: [{ model: QuizQuestionOption, as: "options" }],
@@ -849,6 +917,185 @@ class QuizController {
   }
 
   // ATTEMPT OPERATIONS
+  // POST /api/quizzes/attempts/by-tag?tag_id=&any_tag_id=
+  async startAttemptByTag(req: AuthRequest, res: Response) {
+    try {
+      if (!req.user) return res.status(401).json({ error: "Auth required" });
+      const { tag_id, any_tag_id } = req.query as any;
+      const { question_count = 10, shuffle = true } = req.body || {};
+      const tagFilter = any_tag_id || tag_id;
+      if (!tagFilter)
+        return res.status(400).json({ error: "tag_id or any_tag_id required" });
+      const tagNum = Number(tagFilter);
+      if (!tagNum) return res.status(400).json({ error: "Invalid tag id" });
+      const expectedCount = Number(question_count) || 10;
+      // Collect active quiz ids for this tag (inclusive when any_tag_id given)
+      let quizIds: number[] = [];
+      if (any_tag_id) {
+        const rows = await sequelize.query(
+          `SELECT DISTINCT q.id FROM quizzes q
+           LEFT JOIN quiz_tag_assignments qta ON qta.quiz_id = q.id
+           WHERE q.is_active = true AND (q.best_practice_tag_id = :tid OR qta.tag_id = :tid)`,
+          { replacements: { tid: tagNum }, type: QueryTypes.SELECT }
+        );
+        quizIds = (rows as any[]).map((r) => r.id);
+      } else {
+        const rows = await Quiz.findAll({
+          where: { best_practice_tag_id: tagNum, is_active: true },
+          attributes: ["id"],
+        });
+        quizIds = rows.map((r) => r.id as number);
+      }
+      if (quizIds.length === 0)
+        return res.status(404).json({ error: "No active quizzes for tag" });
+      // Fetch active questions across all quizzes
+      const rawQuestions = await QuizQuestion.findAll({
+        where: {
+          quiz_id: { [Op.in]: quizIds },
+          is_active: true,
+          is_deleted: false,
+        },
+        // we'll randomize in memory to treat all fairly; cap large sets for perf
+        limit: 500, // safety cap
+      });
+      if (rawQuestions.length === 0)
+        return res
+          .status(409)
+          .json({ error: "No questions available", code: "NO_QUESTIONS" });
+      // Group counts to select canonical quiz (max questions)
+      const counts: Record<number, number> = {};
+      for (const q of rawQuestions)
+        counts[q.quiz_id] = (counts[q.quiz_id] || 0) + 1;
+      let canonicalQuizId = quizIds[0];
+      let max = -1;
+      for (const [qidStr, c] of Object.entries(counts)) {
+        const qid = Number(qidStr);
+        if (c > max) {
+          max = c;
+          canonicalQuizId = qid;
+        }
+      }
+      const canonicalQuiz = await Quiz.findByPk(canonicalQuizId);
+      if (!canonicalQuiz)
+        return res.status(404).json({ error: "Canonical quiz not found" });
+      // Fetch options for all candidate questions
+      const allIds = rawQuestions.map((q) => q.id);
+      const optionRows = await QuizQuestionOption.findAll({
+        where: { question_id: allIds, is_deleted: false },
+        order: [
+          ["order_index", "ASC"],
+          ["id", "ASC"],
+        ],
+      });
+      const optionsByQ: Record<number, any[]> = {};
+      optionRows.forEach((o: any) => {
+        if (!optionsByQ[o.question_id]) optionsByQ[o.question_id] = [];
+        optionsByQ[o.question_id].push(o);
+      });
+      for (const q of rawQuestions) {
+        const opts = (optionsByQ[q.id] || []).map((o: any) => {
+          const plain = o.toJSON ? o.toJSON() : { ...o };
+          return {
+            id: plain.id,
+            question_id: plain.question_id,
+            text: plain.text,
+            is_correct: plain.is_correct,
+            order_index: plain.order_index,
+          };
+        });
+        (q as any).setDataValue("options", opts);
+      }
+      const usable = rawQuestions.filter(
+        (q: any) =>
+          Array.isArray(
+            (q as any).get ? (q as any).get("options") : (q as any).options
+          ) &&
+          ((q as any).get ? (q as any).get("options") : (q as any).options)
+            .length > 0
+      );
+      if (usable.length === 0)
+        return res.status(409).json({
+          error: "No questions with options available",
+          code: "NO_OPTIONS",
+        });
+      // Shuffle full set
+      const shuffled = usable.sort(() => Math.random() - 0.5);
+      const finalQuestions = shuffled.slice(0, expectedCount);
+      const isPartial = finalQuestions.length < expectedCount;
+      // Snapshot
+      const snapshot = finalQuestions.map((q) => {
+        const obj: any = q.toJSON();
+        return {
+          id: obj.id,
+          text: obj.text,
+          prompt: obj.text,
+          type: obj.type,
+          difficulty: obj.difficulty,
+          explanation: obj.explanation,
+          quiz_id: obj.quiz_id, // original quiz source
+          options: (obj.options || []).map((o: any) => ({
+            id: o.id,
+            text: o.text,
+            is_correct: !!o.is_correct,
+          })),
+        };
+      });
+      const servedIds = finalQuestions.map((q) => q.id);
+      const durationSeconds = canonicalQuiz.duration * 60;
+      const startedAt = new Date();
+      const expiresAt = new Date(startedAt.getTime() + durationSeconds * 1000);
+      const attempt = await QuizAttempt.create({
+        quiz_id: canonicalQuizId,
+        user_id: req.user.id,
+        duration_seconds_snapshot: durationSeconds,
+        started_at: startedAt,
+        expires_at: expiresAt,
+        served_question_ids: servedIds,
+        total_questions: servedIds.length,
+        question_order: servedIds,
+        passing_score_snapshot: canonicalQuiz.passing_score,
+        status: "in_progress",
+        attempt_questions_snapshot: snapshot,
+      });
+      // Sanitize for response
+      const sanitized = finalQuestions.map((q) => {
+        const obj: any = q.toJSON();
+        if (obj && obj.id && !obj.question_id) obj.question_id = obj.id;
+        if (obj.options) obj.options.forEach((o: any) => delete o.is_correct);
+        return obj;
+      });
+      return res.status(201).json({
+        attempt: {
+          id: attempt.id,
+          quiz_id: canonicalQuizId,
+          started_at: attempt.started_at,
+          expires_at: attempt.expires_at,
+          duration_seconds: durationSeconds,
+          status: attempt.status,
+        },
+        quiz: {
+          id: canonicalQuiz.id,
+          title: canonicalQuiz.title,
+          description: canonicalQuiz.description,
+          passing_score: canonicalQuiz.passing_score,
+        },
+        questions: sanitized,
+        requested_question_count: expectedCount,
+        served_question_count: sanitized.length,
+        partial_set: isPartial,
+        shortfall: isPartial ? expectedCount - sanitized.length : 0,
+        reused: false,
+        aggregated: true,
+        aggregated_tag_id: tagNum,
+        aggregated_quiz_ids: quizIds,
+      });
+    } catch (e) {
+      console.error("[quizAttempts:startByTag]", e);
+      return res
+        .status(500)
+        .json({ error: "Failed to start aggregated attempt" });
+    }
+  }
   // POST /api/quizzes/:id/attempts
   async startAttempt(req: AuthRequest, res: Response) {
     try {
@@ -1557,32 +1804,52 @@ class QuizController {
     try {
       const quizId = Number(req.params.id);
       const hasUser = !!req.user;
-      const row = await sequelize.query(
-        `SELECT
-           COUNT(*) FILTER (WHERE submitted_at IS NOT NULL) AS attempts_submitted,
-           AVG(score_percent) AS avg_percent,
-           AVG(CASE WHEN passed THEN 1 ELSE 0 END) AS pass_rate,
-           ${
-             hasUser
-               ? "AVG(score_percent) FILTER (WHERE user_id = :userId) AS user_avg_percent"
-               : "NULL AS user_avg_percent"
-           }
-         FROM quiz_attempts
-         WHERE quiz_id = :quizId`,
+      // Build a unified attempt set: direct attempts OR aggregated attempts whose snapshot contained at least one question from this quiz.
+      // This ensures users taking category-wide (aggregated) attempts still influence and see stats for the quiz whose bank supplied questions.
+      const unifiedRows = await sequelize.query(
+        `WITH target_attempts AS (
+            SELECT qa.id, qa.user_id, qa.score_percent, qa.passed, qa.submitted_at, qa.score_raw, qa.score_points
+            FROM quiz_attempts qa
+            WHERE qa.submitted_at IS NOT NULL AND (
+              qa.quiz_id = :quizId OR EXISTS (
+                SELECT 1 FROM jsonb_array_elements(COALESCE(qa.attempt_questions_snapshot::jsonb, '[]'::jsonb)) AS q(obj)
+                WHERE (q.obj->>'quiz_id')::int = :quizId
+              )
+            )
+        )
+        SELECT
+          COUNT(*) AS attempts_submitted,
+          AVG(score_percent) AS avg_percent,
+          AVG(CASE WHEN passed THEN 1 ELSE 0 END) AS pass_rate,
+          ${
+            hasUser
+              ? "AVG(score_percent) FILTER (WHERE user_id = :userId) AS user_avg_percent"
+              : "NULL AS user_avg_percent"
+          }
+        FROM target_attempts`,
         {
           type: QueryTypes.SELECT,
           replacements: { quizId, userId: hasUser ? req.user!.id : null },
         }
       );
-      const data: any = row[0] || {};
+      const unified: any = unifiedRows[0] || {};
+
       let bestAttempt: any = null;
       if (req.user) {
         const bestRows = await sequelize.query(
-          `SELECT id, score_raw, score_percent, score_points, passed, submitted_at
-             FROM quiz_attempts
-             WHERE quiz_id = :quizId AND user_id = :userId AND submitted_at IS NOT NULL
-             ORDER BY score_percent DESC NULLS LAST, submitted_at DESC
-             LIMIT 1`,
+          `WITH target_attempts AS (
+              SELECT qa.* FROM quiz_attempts qa
+              WHERE qa.submitted_at IS NOT NULL AND (
+                qa.quiz_id = :quizId OR EXISTS (
+                  SELECT 1 FROM jsonb_array_elements(COALESCE(qa.attempt_questions_snapshot::jsonb, '[]'::jsonb)) AS q(obj)
+                  WHERE (q.obj->>'quiz_id')::int = :quizId
+                )
+              ) AND qa.user_id = :userId
+            )
+            SELECT id, score_raw, score_percent, score_points, passed, submitted_at
+            FROM target_attempts
+            ORDER BY score_percent DESC NULLS LAST, submitted_at DESC
+            LIMIT 1`,
           {
             type: QueryTypes.SELECT,
             replacements: { quizId, userId: req.user.id },
@@ -1590,21 +1857,22 @@ class QuizController {
         );
         if (bestRows.length) bestAttempt = bestRows[0];
       }
+
       return res.json({
         stats: {
-          attempts: Number(data.attempts_submitted || 0),
+          attempts: Number(unified.attempts_submitted || 0),
           average_percent:
-            data.avg_percent !== null
-              ? Math.round(Number(data.avg_percent))
+            unified.avg_percent !== null
+              ? Math.round(Number(unified.avg_percent))
               : 0,
           user_average_percent:
-            data.user_avg_percent !== null &&
-            data.user_avg_percent !== undefined
-              ? Math.round(Number(data.user_avg_percent))
+            unified.user_avg_percent !== null &&
+            unified.user_avg_percent !== undefined
+              ? Math.round(Number(unified.user_avg_percent))
               : null,
           success_rate:
-            data.pass_rate !== null
-              ? Math.round(Number(data.pass_rate) * 100)
+            unified.pass_rate !== null
+              ? Math.round(Number(unified.pass_rate) * 100)
               : 0,
           best_attempt: bestAttempt,
         },

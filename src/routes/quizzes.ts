@@ -69,6 +69,13 @@ router.get(
   optionalAuth,
   quizController.listQuestionsByTag.bind(quizController)
 );
+// Aggregated attempt across all quizzes for a tag
+router.post(
+  "/attempts/by-tag",
+  authenticateWithCookies,
+  requireAnyPermission([READ, CREATE, MANAGE, UPDATE]),
+  quizController.startAttemptByTag.bind(quizController)
+);
 
 // Standalone question operations
 router.get(
