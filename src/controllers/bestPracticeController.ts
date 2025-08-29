@@ -317,6 +317,10 @@ class BestPracticeController {
     const id = Number(req.params.id);
     if (!id) return res.status(400).json({ error: "Invalid id" });
     try {
+      // Contract (documented):
+      // - Response.practice.read is POST-STATE (true if the user now has a read row; may have been created during this request).
+      // - Response.scoring.awarded_first_read is true ONLY on the request that created the first read row & awarded points.
+      //   Frontend should gate +points flash exclusively on awarded_first_read.
       const practice = await BestPracticeContent.findOne({
         where: { id, is_deleted: false },
         include: [
@@ -357,6 +361,10 @@ class BestPracticeController {
 
       // Record read receipt & first-read scoring (idempotent)
       let awarded_first_read = false;
+      // We expose a user-specific read flag in the response that represents the *state before this request*.
+      // If this request resulted in awarding a first read, we still return read=false so the frontend can flash +1.
+      // On subsequent loads it will return true.
+      let user_read_before = false;
       let user_points: number | undefined;
       let user_level: number | undefined;
       if (req.user) {
@@ -455,6 +463,7 @@ class BestPracticeController {
               }
             });
             awarded_first_read = true;
+            user_read_before = false; // before this request user had NOT read it
             const total = scoringResult.totals.find(
               (trow) => trow.userId === req.user!.id
             );
@@ -473,6 +482,7 @@ class BestPracticeController {
               }
             }
           } else {
+            user_read_before = true; // already had a read row
             const existingTotal = await UserScoreTotal.findByPk(req.user!.id, {
               transaction: t,
             });
@@ -594,7 +604,19 @@ class BestPracticeController {
       }
 
       return res.json({
-        practice,
+        practice: (() => {
+          try {
+            const json: any = practice.toJSON();
+            if (req.user) {
+              // read reflects POST-STATE: true if user has a read record now (whether previous or just created)
+              json.read_before = user_read_before; // pre-state
+              json.read = user_read_before || awarded_first_read ? true : false; // post-state
+            }
+            return json;
+          } catch {
+            return practice;
+          }
+        })(),
         navigation: {
           prevId: prevItem?.id || null,
           nextId: nextItem?.id || null,
