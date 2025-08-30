@@ -12,9 +12,12 @@ export const Points = {
   REPORT_REJECTED_REPORTER_REWARD: 1,
   STREAK_7: 5,
   STREAK_30: 10,
-  STREAK_90: 15,
-  STREAK_180: 20,
-  STREAK_365: 25,
+  // Refined streak bonus progression:
+  // 7 (+5 cumulative 5), 30 (+10 cumulative 15), 90 (+25 cumulative 40),
+  // 180 (+50 cumulative 90), 365 (+100 cumulative 190)
+  STREAK_90: 25,
+  STREAK_180: 50,
+  STREAK_365: 100,
   TRICKLE_PARENT_SUPPORTIVE: 1,
   TRICKLE_GRANDPARENT_SUPPORTIVE: 0.5,
   TRICKLE_ROOT_SUPPORTIVE: 0.25,
