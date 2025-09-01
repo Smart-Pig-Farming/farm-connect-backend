@@ -370,59 +370,55 @@ class BestPracticeController {
       if (req.user) {
         await sequelize.transaction(async (t: Transaction) => {
           let firstRead = false;
-          try {
+          
+          // First, check if a read record already exists
+          const existing: any[] = await sequelize.query(
+            `SELECT id, read_count FROM best_practice_reads WHERE best_practice_id = :bpId AND user_id = :uid FOR UPDATE`,
+            {
+              replacements: { bpId: id, uid: req.user!.id },
+              type: QueryTypes.SELECT,
+              transaction: t,
+            }
+          );
+
+          if (existing.length) {
+            // Update existing record
+            await sequelize.query(
+              `UPDATE best_practice_reads SET last_read_at = NOW(), read_count = read_count + 1 WHERE id = :rid`,
+              {
+                replacements: { rid: (existing[0] as any).id },
+                transaction: t,
+              }
+            );
+          } else {
+            // Insert new record
             await sequelize.query(
               `INSERT INTO best_practice_reads (best_practice_id,user_id,first_read_at,last_read_at,read_count)
                VALUES (:bpId,:uid,NOW(),NOW(),1)`,
               { replacements: { bpId: id, uid: req.user!.id }, transaction: t }
             );
             firstRead = true;
-          } catch (err: any) {
-            const existing: any[] = await sequelize.query(
-              `SELECT id, read_count FROM best_practice_reads WHERE best_practice_id = :bpId AND user_id = :uid FOR UPDATE`,
-              {
-                replacements: { bpId: id, uid: req.user!.id },
-                type: QueryTypes.SELECT,
-                transaction: t,
-              }
-            );
-            if (existing.length) {
-              await sequelize.query(
-                `UPDATE best_practice_reads SET last_read_at = NOW(), read_count = read_count + 1 WHERE id = :rid`,
-                {
-                  replacements: { rid: (existing[0] as any).id },
-                  transaction: t,
-                }
-              );
-            } else {
-              await sequelize.query(
-                `INSERT INTO best_practice_reads (best_practice_id,user_id,first_read_at,last_read_at,read_count)
-                 VALUES (:bpId,:uid,NOW(),NOW(),1)`,
-                {
-                  replacements: { bpId: id, uid: req.user!.id },
-                  transaction: t,
-                }
-              );
-              firstRead = true;
-            }
-            await sequelize
-              .query(
-                `DO $$ BEGIN
-                   IF NOT EXISTS (
-                     SELECT 1 FROM pg_constraint c
-                     JOIN pg_class t ON c.conrelid = t.oid
-                     WHERE t.relname = 'best_practice_reads' AND c.conname = 'uniq_bp_read_user'
-                   ) THEN
-                     BEGIN
-                       ALTER TABLE best_practice_reads ADD CONSTRAINT uniq_bp_read_user UNIQUE (best_practice_id, user_id);
-                     EXCEPTION WHEN others THEN
-                     END;
-                   END IF;
+          }
+
+          // Ensure unique constraint exists (this should be moved to a migration)
+          await sequelize
+            .query(
+              `DO $$ BEGIN
+                 IF NOT EXISTS (
+                   SELECT 1 FROM pg_constraint c
+                   JOIN pg_class t ON c.conrelid = t.oid
+                   WHERE t.relname = 'best_practice_reads' AND c.conname = 'uniq_bp_read_user'
+                 ) THEN
+                   BEGIN
+                     ALTER TABLE best_practice_reads ADD CONSTRAINT uniq_bp_read_user UNIQUE (best_practice_id, user_id);
+                   EXCEPTION WHEN others THEN
+                   END;
+                 END IF;
                  END $$;`,
                 { transaction: t }
               )
               .catch(() => {});
-          }
+              
           await sequelize.query(
             `UPDATE best_practice_contents SET read_count = read_count + 1 WHERE id = :bpId`,
             { replacements: { bpId: id }, transaction: t }

@@ -27,6 +27,7 @@ import notificationRoutes from "./routes/notifications";
 import scoreRoutes from "./routes/score";
 import bestPracticeRoutes from "./routes/bestPractices";
 import quizRoutes from "./routes/quizzes";
+import chatRoutes from "./routes/chat";
 
 class App {
   public app: Application;
@@ -217,6 +218,9 @@ class App {
 
     // Quiz routes
     this.app.use("/api/quizzes", quizRoutes);
+
+    // Chat routes
+    this.app.use("/api/chat", chatRoutes);
 
     // Test routes (for development/testing)
     this.app.use("/api/test", testRoutes);
