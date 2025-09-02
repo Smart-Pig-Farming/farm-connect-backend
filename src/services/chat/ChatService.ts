@@ -42,7 +42,7 @@ class ChatService {
    */
   async processMessage(request: ChatRequest): Promise<ChatResponse> {
     const startTime = Date.now();
-    
+
     try {
       if (!geminiService.isConfigured()) {
         return {
@@ -59,9 +59,7 @@ class ChatService {
       // Validate and sanitize input
       if (!message?.trim()) {
         return {
-          message: this.createErrorMessage(
-            "Please provide a valid message."
-          ),
+          message: this.createErrorMessage("Please provide a valid message."),
           success: false,
           error: "INVALID_INPUT",
         };
@@ -73,7 +71,9 @@ class ChatService {
       const topics = ragService.extractTopics(sanitizedMessage);
       const searchCategories = categories || topics.categories;
 
-      console.log(`[RAG] Query analysis: ${topics.keywords.length} keywords, ${searchCategories.length} categories`);
+      console.log(
+        `[RAG] Query analysis: ${topics.keywords.length} keywords, ${searchCategories.length} categories`
+      );
 
       let ragContext: RAGContext;
 
@@ -85,23 +85,27 @@ class ChatService {
           this.MAX_CONTEXT_SOURCES,
           searchCategories.length > 0 ? searchCategories : undefined
         );
-        
+
         // If we didn't get enough high-quality results, supplement with category search
         if (ragContext.results.length < 3 && searchCategories.length > 0) {
           const categoryContext = await ragService.getContentByCategory(
             searchCategories,
             this.MAX_CONTEXT_SOURCES - ragContext.results.length
           );
-          
+
           // Merge results, avoiding duplicates
-          const existingIds = new Set(ragContext.results.map(r => r.id));
-          const newResults = categoryContext.results.filter(r => !existingIds.has(r.id));
-          
+          const existingIds = new Set(ragContext.results.map((r) => r.id));
+          const newResults = categoryContext.results.filter(
+            (r) => !existingIds.has(r.id)
+          );
+
           ragContext.results.push(...newResults);
           ragContext.contextText.push(...categoryContext.contextText);
           ragContext.totalResults += categoryContext.totalResults;
-          
-          console.log(`[RAG] Enhanced with ${newResults.length} category results`);
+
+          console.log(
+            `[RAG] Enhanced with ${newResults.length} category results`
+          );
         }
       } else if (searchCategories.length > 0) {
         // Category-based search if no clear keywords
@@ -118,16 +122,20 @@ class ChatService {
 
       // Filter results by relevance threshold
       const filteredResults = ragContext.results.filter(
-        result => result.relevanceScore >= this.MIN_RELEVANCE_THRESHOLD
+        (result) => result.relevanceScore >= this.MIN_RELEVANCE_THRESHOLD
       );
-      
-      console.log(`[RAG] Found ${ragContext.results.length} results, ${filteredResults.length} above threshold`);
+
+      console.log(
+        `[RAG] Found ${ragContext.results.length} results, ${filteredResults.length} above threshold`
+      );
 
       // Update context with filtered results
       ragContext.results = filteredResults;
-      ragContext.contextText = filteredResults.map(result => 
-        ragContext.contextText[ragContext.results.indexOf(result)]
-      ).filter(Boolean);
+      ragContext.contextText = filteredResults
+        .map(
+          (result) => ragContext.contextText[ragContext.results.indexOf(result)]
+        )
+        .filter(Boolean);
 
       // Build conversation for Gemini
       const geminiMessages = this.buildGeminiConversation(

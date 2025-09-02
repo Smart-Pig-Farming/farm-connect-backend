@@ -5,5 +5,5 @@
  * Usage: npm run populate-best-practices
  */
 
-require('ts-node/register');
-require('./src/scripts/populate_best_practices.ts');
+require("ts-node/register");
+require("./src/scripts/populate_best_practices.ts");

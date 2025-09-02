@@ -367,4 +367,43 @@ router.post(
   discussionController.getReplyVotersBulk
 );
 
+/**
+ * @route   PATCH /api/discussions/replies/:id
+ * @desc    Update a reply (author only)
+ * @access  Private (authenticated users only)
+ */
+router.patch(
+  "/replies/:id",
+  authenticateWithCookies,
+  csrfProtection,
+  uuidValidation,
+  [
+    body("content")
+      .isLength({ min: 5, max: 2000 })
+      .withMessage("Content must be between 5 and 2000 characters")
+      .custom((value) => {
+        if (!value || value.trim().length === 0) {
+          throw new Error("Content cannot be empty or whitespace only");
+        }
+        return true;
+      }),
+  ],
+  handleValidationErrors,
+  discussionController.updateReply
+);
+
+/**
+ * @route   DELETE /api/discussions/replies/:id
+ * @desc    Delete a reply (author only) - soft delete
+ * @access  Private (authenticated users only)
+ */
+router.delete(
+  "/replies/:id",
+  authenticateWithCookies,
+  csrfProtection,
+  uuidValidation,
+  handleValidationErrors,
+  discussionController.deleteReply
+);
+
 export default router;

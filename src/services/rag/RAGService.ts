@@ -68,7 +68,7 @@ class RAGService {
               BestPracticeContent.sequelize!.literal(
                 `LOWER(benefits_json::text) LIKE LOWER('%${phrase}%')`
               ),
-            ]
+            ],
           });
         });
       }
@@ -82,12 +82,18 @@ class RAGService {
               { description: { [Op.iLike]: `%${word}%` } },
               // Use raw SQL for JSONB search with escaped content
               BestPracticeContent.sequelize!.literal(
-                `LOWER(steps_json::text) LIKE LOWER('%${word.replace(/'/g, "''")}%')`
+                `LOWER(steps_json::text) LIKE LOWER('%${word.replace(
+                  /'/g,
+                  "''"
+                )}%')`
               ),
               BestPracticeContent.sequelize!.literal(
-                `LOWER(benefits_json::text) LIKE LOWER('%${word.replace(/'/g, "''")}%')`
+                `LOWER(benefits_json::text) LIKE LOWER('%${word.replace(
+                  /'/g,
+                  "''"
+                )}%')`
               ),
-            ]
+            ],
           });
         });
       }
@@ -95,9 +101,10 @@ class RAGService {
       // Use OR logic - at least one search term should match
       const whereCondition = {
         ...searchConditions,
-        [Op.or]: searchQueries.length > 0 ? searchQueries : [
-          { title: { [Op.iLike]: `%${normalizedQuery}%` } }
-        ],
+        [Op.or]:
+          searchQueries.length > 0
+            ? searchQueries
+            : [{ title: { [Op.iLike]: `%${normalizedQuery}%` } }],
       };
 
       // Get more results than needed to allow for better scoring and filtering
@@ -119,7 +126,7 @@ class RAGService {
 
       // Filter out low-relevance results and sort by score
       const filteredResults = scoredResults
-        .filter(result => result.relevanceScore > 0.5) // Filter very low relevance
+        .filter((result) => result.relevanceScore > 0.5) // Filter very low relevance
         .sort((a, b) => b.relevanceScore - a.relevanceScore)
         .slice(0, limit);
 
@@ -232,7 +239,9 @@ class RAGService {
     const titleText = (bp.title || "").toLowerCase();
     const descText = (bp.description || "").toLowerCase();
     const stepsText = this.extractTextFromJsonb(bp.steps_json).toLowerCase();
-    const benefitsText = this.extractTextFromJsonb(bp.benefits_json).toLowerCase();
+    const benefitsText = this.extractTextFromJsonb(
+      bp.benefits_json
+    ).toLowerCase();
     const allContent = `${titleText} ${descText} ${stepsText} ${benefitsText}`;
 
     // Check for exact phrase matches (highest priority)
@@ -257,7 +266,7 @@ class RAGService {
     if (descText.includes(normalizedQuery)) {
       score += 5;
     }
-    
+
     let descMatches = 0;
     queryWords.forEach((word) => {
       if (descText.includes(word)) {
@@ -288,13 +297,19 @@ class RAGService {
 
     // Word proximity bonus - check if query words appear close together
     if (queryWords.length > 1) {
-      const proximityBonus = this.calculateProximityBonus(allContent, queryWords);
+      const proximityBonus = this.calculateProximityBonus(
+        allContent,
+        queryWords
+      );
       score += proximityBonus;
     }
 
     // Category relevance
     const categories = bp.categories || [];
-    const hasRelevantCategory = this.checkCategoryRelevance(categories, normalizedQuery);
+    const hasRelevantCategory = this.checkCategoryRelevance(
+      categories,
+      normalizedQuery
+    );
     if (hasRelevantCategory) {
       score += 1;
     }
@@ -306,7 +321,8 @@ class RAGService {
 
     // Freshness bonus for recent content
     const createdAt = new Date(bp.created_at);
-    const daysSinceCreation = (Date.now() - createdAt.getTime()) / (1000 * 60 * 60 * 24);
+    const daysSinceCreation =
+      (Date.now() - createdAt.getTime()) / (1000 * 60 * 60 * 24);
     if (daysSinceCreation < 30) score += 0.5;
 
     return Math.max(score, 0.1); // Minimum score for any matched content
@@ -527,7 +543,7 @@ class RAGService {
    */
   private extractTextFromJsonb(jsonbField: any): string {
     if (!Array.isArray(jsonbField)) return "";
-    
+
     return jsonbField
       .map((item) => {
         if (typeof item === "string") {
@@ -544,7 +560,10 @@ class RAGService {
   /**
    * Calculate proximity bonus based on how close query words appear together
    */
-  private calculateProximityBonus(content: string, queryWords: string[]): number {
+  private calculateProximityBonus(
+    content: string,
+    queryWords: string[]
+  ): number {
     if (queryWords.length < 2) return 0;
 
     let proximityBonus = 0;
@@ -552,9 +571,9 @@ class RAGService {
 
     for (let i = 0; i < queryWords.length - 1; i++) {
       for (let j = i + 1; j < queryWords.length; j++) {
-        const word1Index = words.findIndex(w => w.includes(queryWords[i]));
-        const word2Index = words.findIndex(w => w.includes(queryWords[j]));
-        
+        const word1Index = words.findIndex((w) => w.includes(queryWords[i]));
+        const word2Index = words.findIndex((w) => w.includes(queryWords[j]));
+
         if (word1Index !== -1 && word2Index !== -1) {
           const distance = Math.abs(word1Index - word2Index);
           if (distance === 1) proximityBonus += 3; // Adjacent words
@@ -586,25 +605,56 @@ class RAGService {
 
     // Remove quotes and normalize
     const cleanedQuery = query
-      .replace(/"([^"]+)"/g, '$1') // Remove quotes but keep content
+      .replace(/"([^"]+)"/g, "$1") // Remove quotes but keep content
       .toLowerCase()
       .trim();
 
     // Extract keywords (filter out stop words and short words)
     const stopWords = [
-      "the", "and", "for", "with", "how", "what", "when", "where", "why",
-      "can", "should", "will", "best", "good", "better", "is", "are", "was",
-      "were", "be", "been", "have", "has", "had", "do", "does", "did", "a",
-      "an", "this", "that", "these", "those", "to", "of", "in", "on", "at"
+      "the",
+      "and",
+      "for",
+      "with",
+      "how",
+      "what",
+      "when",
+      "where",
+      "why",
+      "can",
+      "should",
+      "will",
+      "best",
+      "good",
+      "better",
+      "is",
+      "are",
+      "was",
+      "were",
+      "be",
+      "been",
+      "have",
+      "has",
+      "had",
+      "do",
+      "does",
+      "did",
+      "a",
+      "an",
+      "this",
+      "that",
+      "these",
+      "those",
+      "to",
+      "of",
+      "in",
+      "on",
+      "at",
     ];
 
-    const keywords = cleanedQuery
-      .split(/\s+/)
-      .filter(word => 
-        word.length > 2 && 
-        !stopWords.includes(word) &&
-        !/^\d+$/.test(word) // Remove pure numbers
-      );
+    const keywords = cleanedQuery.split(/\s+/).filter(
+      (word) =>
+        word.length > 2 && !stopWords.includes(word) && !/^\d+$/.test(word) // Remove pure numbers
+    );
 
     // Simple intent detection
     let intent = "general";
@@ -620,7 +670,7 @@ class RAGService {
       cleanedQuery,
       phrases,
       keywords,
-      intent
+      intent,
     };
   }
 
@@ -648,14 +698,15 @@ class RAGService {
     ];
 
     // Check if query contains farming-related terms
-    const hasAgricultureTerms = agricultureKeywords.some(keyword => 
+    const hasAgricultureTerms = agricultureKeywords.some((keyword) =>
       query.includes(keyword)
     );
 
     // Check if any category matches query context
-    const categoryRelevant = categories.some((cat: string) =>
-      agricultureKeywords.some((keyword) => cat.includes(keyword)) ||
-      query.split(/\s+/).some(word => cat.includes(word))
+    const categoryRelevant = categories.some(
+      (cat: string) =>
+        agricultureKeywords.some((keyword) => cat.includes(keyword)) ||
+        query.split(/\s+/).some((word) => cat.includes(word))
     );
 
     return hasAgricultureTerms || categoryRelevant;

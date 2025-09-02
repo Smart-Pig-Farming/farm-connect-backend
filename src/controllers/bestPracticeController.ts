@@ -370,7 +370,7 @@ class BestPracticeController {
       if (req.user) {
         await sequelize.transaction(async (t: Transaction) => {
           let firstRead = false;
-          
+
           // First, check if a read record already exists
           const existing: any[] = await sequelize.query(
             `SELECT id, read_count FROM best_practice_reads WHERE best_practice_id = :bpId AND user_id = :uid FOR UPDATE`,
@@ -415,10 +415,10 @@ class BestPracticeController {
                    END;
                  END IF;
                  END $$;`,
-                { transaction: t }
-              )
-              .catch(() => {});
-              
+              { transaction: t }
+            )
+            .catch(() => {});
+
           await sequelize.query(
             `UPDATE best_practice_contents SET read_count = read_count + 1 WHERE id = :bpId`,
             { replacements: { bpId: id }, transaction: t }

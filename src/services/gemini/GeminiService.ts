@@ -169,7 +169,8 @@ ${content}
   .join("\n")}
 
 Instructions:
-1. Answer questions about all aspects of farming including livestock management (pigs, cattle, poultry, etc.), crop production, sustainable agriculture, and related agricultural practices
+1. Answer questions about all aspects of farming including livestock management (pigs, cattle, poultry, etc.), crop production, 
+   sustainable agriculture, and related agricultural practices
 2. Use the provided context to give accurate and helpful advice based on proven farming methods
 3. If the question is outside your knowledge or the provided context, acknowledge it and provide general farming guidance when possible
 4. Keep responses practical, clear, and actionable for farmers of all experience levels

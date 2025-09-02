@@ -71,7 +71,12 @@ DiscussionReply.init(
       type: DataTypes.TEXT,
       allowNull: false,
       validate: {
-        len: [5, 5000],
+        notEmpty: true,
+        isNotWhitespace(value: string) {
+          if (!value || value.trim().length === 0) {
+            throw new Error("Content cannot be empty or only whitespace");
+          }
+        },
       },
     },
     post_id: {

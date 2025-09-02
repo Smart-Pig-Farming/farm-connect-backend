@@ -1,7 +1,10 @@
-import sequelize from '../config/database';
-import BestPracticeContent from '../models/BestPracticeContent';
-import User from '../models/User';
-import Role from '../models/Role';
+import sequelize from "../config/database";
+import BestPracticeContent from "../models/BestPracticeContent";
+import User from "../models/User";
+import Role from "../models/Role";
+import { StorageFactory } from "../services/storage/StorageFactory";
+import fs from "fs";
+import path from "path";
 
 interface ParsedPractice {
   title: string;
@@ -1072,82 +1075,178 @@ const bestPracticesData = `
 `;
 
 class BestPracticesParser {
-  
   // Map markdown category names to backend category keys
   private static readonly CATEGORY_MAPPING: Record<string, string> = {
-    'FEEDING/NUTRITION': 'feeding_nutrition',
-    'FEEDING': 'feeding_nutrition',
-    'DISEASE CONTROL': 'disease_control',
-    'GROWTH & WEIGHT MANAGEMENT': 'growth_weight',
-    'ENVIRONMENT MANAGEMENT': 'environment_management',
-    'BREEDING & INSEMINATION': 'breeding_insemination',
-    'FARROWING MANAGEMENT': 'farrowing_management',
-    'RECORD & FARM MANAGEMENT': 'record_management',
-    'MARKETING & FINANCE': 'marketing_finance'
+    "FEEDING/NUTRITION": "feeding_nutrition",
+    FEEDING: "feeding_nutrition",
+    "DISEASE CONTROL": "disease_control",
+    "GROWTH & WEIGHT MANAGEMENT": "growth_weight",
+    "ENVIRONMENT MANAGEMENT": "environment_management",
+    "BREEDING & INSEMINATION": "breeding_insemination",
+    "FARROWING MANAGEMENT": "farrowing_management",
+    "RECORD & FARM MANAGEMENT": "record_management",
+    "MARKETING & FINANCE": "marketing_finance",
   };
-  
+
+  // Available images in public/images folder (local files to upload)
+  private static readonly AVAILABLE_IMAGES = [
+    "post_image.jpg",
+    "post_image2.jpg",
+    "post_image3.jpg",
+    "post_image4.jpg",
+  ];
+
+  // Category-specific image mapping for better visual representation
+  private static readonly CATEGORY_IMAGE_MAPPING: Record<string, string[]> = {
+    feeding_nutrition: ["post_image.jpg", "post_image2.jpg"],
+    disease_control: ["post_image3.jpg", "post_image4.jpg"],
+    growth_weight: ["post_image.jpg", "post_image3.jpg"],
+    environment_management: ["post_image2.jpg", "post_image4.jpg"],
+    breeding_insemination: ["post_image.jpg", "post_image4.jpg"],
+    farrowing_management: ["post_image2.jpg", "post_image3.jpg"],
+    record_management: ["post_image3.jpg", "post_image4.jpg"],
+    marketing_finance: ["post_image.jpg", "post_image2.jpg"],
+  };
+
+  /**
+   * Upload local image to Cloudinary and return media object
+   */
+  static async uploadImageToCloudinary(
+    imageName: string,
+    practiceId: string
+  ): Promise<any> {
+    try {
+      const imagePath = path.join(process.cwd(), "public", "images", imageName);
+
+      if (!fs.existsSync(imagePath)) {
+        console.warn(`⚠️  Image not found: ${imagePath}`);
+        return null;
+      }
+
+      const imageBuffer = fs.readFileSync(imagePath);
+      const imageStats = fs.statSync(imagePath);
+      const storage = StorageFactory.createStorageService();
+
+      console.log(`📤 Uploading ${imageName} to Cloudinary...`);
+
+      const uploaded = await storage.upload(imageBuffer, {
+        fileName: imageName,
+        mimeType: "image/jpeg",
+        mediaType: "image" as const,
+        postId: practiceId,
+        fileSize: imageStats.size,
+      });
+
+      return {
+        url: uploaded.url,
+        thumbnail_url: uploaded.thumbnailUrl,
+        alt_text: `Best practice image for ${imageName}`,
+        storageKey: uploaded.storageKey,
+      };
+    } catch (error) {
+      console.error(`❌ Failed to upload ${imageName}:`, error);
+      return null;
+    }
+  }
+
+  /**
+   * Get a random image for a category and upload it to Cloudinary
+   */
+  static async getRandomImageMedia(category?: string): Promise<any> {
+    const imageName = this.getRandomImageName(category);
+    const practiceId = `bp_${Date.now()}_${Math.random()
+      .toString(36)
+      .substring(7)}`;
+    return await this.uploadImageToCloudinary(imageName, practiceId);
+  }
+
+  /**
+   * Get a random image filename from available images, preferably category-specific
+   */
+  static getRandomImageName(category?: string): string {
+    if (category && this.CATEGORY_IMAGE_MAPPING[category]) {
+      const categoryImages = this.CATEGORY_IMAGE_MAPPING[category];
+      const randomIndex = Math.floor(Math.random() * categoryImages.length);
+      return categoryImages[randomIndex];
+    }
+
+    // Fallback to any random image
+    const randomIndex = Math.floor(
+      Math.random() * this.AVAILABLE_IMAGES.length
+    );
+    return this.AVAILABLE_IMAGES[randomIndex];
+  }
+
   /**
    * Parse the markdown content into structured practices
    */
   static parseBestPractices(content: string): ParsedPractice[] {
     const practices: ParsedPractice[] = [];
     const sections = content.split(/## \d+\./);
-    
+
     for (const section of sections) {
       if (!section.trim()) continue;
-      
+
       const categoryMatch = section.match(/^([A-Z\s&]+)/);
       if (!categoryMatch) continue;
-      
+
       const category = categoryMatch[1].trim();
-      const practiceMatches = section.matchAll(/### Practice \d+: (.+?)\n\*\*Description:\*\* (.+?)\n\*\*Steps:\*\*([\s\S]*?)\n\*\*Benefits:\*\*([\s\S]*?)(?=\n### |$)/g);
-      
+      const practiceMatches = section.matchAll(
+        /### Practice \d+: (.+?)\n\*\*Description:\*\* (.+?)\n\*\*Steps:\*\*([\s\S]*?)\n\*\*Benefits:\*\*([\s\S]*?)(?=\n### |$)/g
+      );
+
       for (const match of practiceMatches) {
         const [, title, description, stepsText, benefitsText] = match;
-        
+
         const steps = this.parseSteps(stepsText);
         const benefits = this.parseBenefits(benefitsText);
-        
+
         // Map the category to the backend format
-        const backendCategory = this.CATEGORY_MAPPING[category] || category.toLowerCase().replace(/\s+/g, '_');
-        
+        const backendCategory =
+          this.CATEGORY_MAPPING[category] ||
+          category.toLowerCase().replace(/\s+/g, "_");
+
         practices.push({
           title: title.trim(),
           description: description.trim(),
           steps,
           benefits,
-          category: backendCategory
+          category: backendCategory,
         });
       }
     }
-    
+
     return practices;
   }
-  
+
   /**
    * Parse steps section into structured array
    */
-  private static parseSteps(stepsText: string): Array<{ id: number; text: string; order: number }> {
-    const stepLines = stepsText.split('\n')
-      .map(line => line.trim())
-      .filter(line => line.startsWith('-'))
-      .map(line => line.substring(1).trim());
-    
+  private static parseSteps(
+    stepsText: string
+  ): Array<{ id: number; text: string; order: number }> {
+    const stepLines = stepsText
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith("-"))
+      .map((line) => line.substring(1).trim());
+
     return stepLines.map((text, index) => ({
       id: index + 1,
       text,
-      order: index + 1
+      order: index + 1,
     }));
   }
-  
+
   /**
    * Parse benefits section into array
    */
   private static parseBenefits(benefitsText: string): string[] {
-    return benefitsText.split('\n')
-      .map(line => line.trim())
-      .filter(line => line.startsWith('-'))
-      .map(line => line.substring(1).trim());
+    return benefitsText
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith("-"))
+      .map((line) => line.substring(1).trim());
   }
 }
 
@@ -1156,32 +1255,36 @@ class BestPracticesParser {
  */
 async function populateBestPractices() {
   try {
-    console.log('🚀 Starting Best Practices population...');
-    
+    console.log("🚀 Starting Best Practices population...");
+
     // Connect to database
     await sequelize.authenticate();
-    console.log('✅ Database connected successfully');
-    
+    console.log("✅ Database connected successfully");
+
     // Set up associations
-    User.belongsTo(Role, { foreignKey: 'role_id' });
-    Role.hasMany(User, { foreignKey: 'role_id' });
-    
+    User.belongsTo(Role, { foreignKey: "role_id" });
+    Role.hasMany(User, { foreignKey: "role_id" });
+
     // Find an admin user to assign as creator
     let adminUser = await User.findOne({
-      include: [{
-        model: Role,
-        where: { name: 'admin' },
-        required: true
-      }]
+      include: [
+        {
+          model: Role,
+          where: { name: "admin" },
+          required: true,
+        },
+      ],
     });
-    
+
     let createdBy: number;
-    
+
     if (!adminUser) {
-      console.log('⚠️  No admin user found, looking for any user...');
+      console.log("⚠️  No admin user found, looking for any user...");
       const anyUser = await User.findOne();
       if (!anyUser) {
-        throw new Error('No users found in database. Please create a user first.');
+        throw new Error(
+          "No users found in database. Please create a user first."
+        );
       }
       console.log(`📝 Using user: ${anyUser.email} as creator`);
       createdBy = anyUser.id;
@@ -1189,60 +1292,68 @@ async function populateBestPractices() {
       console.log(`📝 Using admin user: ${adminUser.email} as creator`);
       createdBy = adminUser.id;
     }
-    
+
     // Parse the practices data
     const practices = BestPracticesParser.parseBestPractices(bestPracticesData);
     console.log(`📊 Parsed ${practices.length} best practices`);
-    
+
     // Clear existing practices (optional - remove if you want to keep existing data)
-    console.log('🧹 Clearing existing best practices...');
+    console.log("🧹 Clearing existing best practices...");
     await BestPracticeContent.destroy({ where: {} });
-    
+
     // Insert new practices
     let insertedCount = 0;
-    
+
     for (const practice of practices) {
       try {
+        // Get a category-specific image uploaded to Cloudinary for this practice
+        console.log(`📝 Creating practice: ${practice.title}`);
+        const mediaObject = await BestPracticesParser.getRandomImageMedia(
+          practice.category
+        );
+
         await BestPracticeContent.create({
           title: practice.title,
           description: practice.description,
           steps_json: practice.steps,
           benefits_json: practice.benefits,
           categories: [practice.category],
-          language: 'en',
+          media: mediaObject, // Cloudinary media object with URLs
+          language: "en",
           is_published: true,
           is_deleted: false,
           read_count: 0,
-          created_by: createdBy
+          created_by: createdBy,
         });
-        
+
         insertedCount++;
-        console.log(`✅ Created: ${practice.title}`);
-        
+        const imageInfo = mediaObject
+          ? `Cloudinary: ${mediaObject.url}`
+          : "No image";
+        console.log(`✅ Created: ${practice.title} (${imageInfo})`);
       } catch (error) {
         console.error(`❌ Failed to create: ${practice.title}`, error);
       }
     }
-    
+
     console.log(`🎉 Successfully populated ${insertedCount} best practices!`);
-    
+
     // Show summary by category
     const summary = practices.reduce((acc, practice) => {
       acc[practice.category] = (acc[practice.category] || 0) + 1;
       return acc;
     }, {} as Record<string, number>);
-    
-    console.log('\n📋 Summary by category:');
+
+    console.log("\n📋 Summary by category:");
     Object.entries(summary).forEach(([category, count]) => {
       console.log(`   ${category}: ${count} practices`);
     });
-    
   } catch (error) {
-    console.error('💥 Error populating best practices:', error);
+    console.error("💥 Error populating best practices:", error);
     throw error;
   } finally {
     await sequelize.close();
-    console.log('🔌 Database connection closed');
+    console.log("🔌 Database connection closed");
   }
 }
 
@@ -1250,11 +1361,11 @@ async function populateBestPractices() {
 if (require.main === module) {
   populateBestPractices()
     .then(() => {
-      console.log('✨ Script completed successfully!');
+      console.log("✨ Script completed successfully!");
       process.exit(0);
     })
     .catch((error) => {
-      console.error('💥 Script failed:', error);
+      console.error("💥 Script failed:", error);
       process.exit(1);
     });
 }

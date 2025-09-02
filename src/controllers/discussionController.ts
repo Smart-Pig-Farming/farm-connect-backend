@@ -2199,6 +2199,18 @@ class DiscussionController {
         },
       });
 
+      // DEBUG LOG: baseline state before applying change
+      try {
+        console.log("[replyVote][debug] PRE", {
+          replyId,
+          userId: req.user.id,
+          incomingVote: vote_type,
+          existingVote: existingVote?.vote_type || null,
+          upvotes: reply.upvotes,
+          downvotes: reply.downvotes,
+        });
+      } catch {}
+
       let voteChange = { upvotes: 0, downvotes: 0 } as any;
       let finalUserVote: "upvote" | "downvote" | null = vote_type;
 
@@ -2230,8 +2242,59 @@ class DiscussionController {
         voteChange[vote_type === "upvote" ? "upvotes" : "downvotes"] = 1;
       }
 
+      try {
+        console.log("[replyVote][debug] APPLY", {
+          replyId,
+          userId: req.user.id,
+          voteChange,
+          finalUserVote,
+        });
+      } catch {}
+
       await reply.increment(voteChange, { transaction });
       await transaction.commit();
+
+      try {
+        const after = await DiscussionReply.findByPk(replyId, {
+          attributes: ["upvotes", "downvotes"],
+        });
+        console.log("[replyVote][debug] POST", {
+          replyId,
+          userId: req.user.id,
+          finalUserVote,
+          persisted: { upvotes: after?.upvotes, downvotes: after?.downvotes },
+        });
+        // Recount actual votes to detect drift
+        const countedUp = await UserVote.count({
+          where: {
+            target_type: "reply",
+            target_id: replyId,
+            vote_type: "upvote",
+          },
+        });
+        const countedDown = await UserVote.count({
+          where: {
+            target_type: "reply",
+            target_id: replyId,
+            vote_type: "downvote",
+          },
+        });
+        if (
+          (after && after.upvotes !== countedUp) ||
+          (after && after.downvotes !== countedDown)
+        ) {
+          console.warn("[replyVote][debug][reconcile] mismatch detected", {
+            replyId,
+            column: { up: after?.upvotes, down: after?.downvotes },
+            recount: { up: countedUp, down: countedDown },
+          });
+          await DiscussionReply.update(
+            { upvotes: countedUp, downvotes: countedDown },
+            { where: { id: replyId } }
+          );
+          console.log("[replyVote][debug][reconcile] columns corrected");
+        }
+      } catch {}
 
       // Scoring integration for reply vote (with trickle) – await to enrich WS
       let replyAuthorPoints: number | undefined;
@@ -3047,6 +3110,126 @@ class DiscussionController {
         success: false,
         error: "Failed to fetch tags",
       });
+    }
+  }
+
+  /**
+   * Update a reply (author only)
+   * PATCH /api/discussions/replies/:id
+   */
+  async updateReply(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!req.user) {
+        res
+          .status(401)
+          .json({ success: false, error: "Authentication required" });
+        return;
+      }
+
+      const { id } = req.params;
+      const { content } = req.body;
+
+      // Find the reply
+      const reply = await DiscussionReply.findByPk(id, {
+        include: [{ model: User, as: "author" }],
+      });
+
+      if (!reply || reply.is_deleted) {
+        res.status(404).json({ success: false, error: "Reply not found" });
+        return;
+      }
+
+      // Check ownership
+      if (reply.author_id !== req.user.id) {
+        res.status(403).json({
+          success: false,
+          error: "You can only edit your own replies",
+        });
+        return;
+      }
+
+      // Update the reply with explicit timestamp
+      const updateResult = await reply.update({
+        content: content.trim(),
+        updated_at: new Date(),
+      });
+
+      // Get the updated timestamp
+      const updatedAt = updateResult.updated_at || new Date();
+
+      // Broadcast update via WebSocket
+      const ws = getWebSocketService();
+      if (ws) {
+        ws.broadcastReplyUpdate({
+          id: reply.id,
+          content: reply.content,
+          postId: reply.post_id,
+          updated_at: updatedAt.toISOString(),
+        });
+      }
+      res.json({
+        success: true,
+        data: {
+          id: reply.id,
+          content: reply.content,
+          updated_at: updatedAt,
+        },
+      });
+    } catch (error) {
+      console.error("Error updating reply:", error);
+      res.status(500).json({ success: false, error: "Failed to update reply" });
+    }
+  }
+
+  /**
+   * Delete a reply (author only) - soft delete
+   * DELETE /api/discussions/replies/:id
+   */
+  async deleteReply(req: AuthenticatedRequest, res: Response): Promise<void> {
+    try {
+      if (!req.user) {
+        res
+          .status(401)
+          .json({ success: false, error: "Authentication required" });
+        return;
+      }
+
+      const { id } = req.params;
+
+      // Find the reply
+      const reply = await DiscussionReply.findByPk(id, {
+        include: [{ model: User, as: "author" }],
+      });
+
+      if (!reply || reply.is_deleted) {
+        res.status(404).json({ success: false, error: "Reply not found" });
+        return;
+      }
+
+      // Check ownership
+      if (reply.author_id !== req.user.id) {
+        res.status(403).json({
+          success: false,
+          error: "You can only delete your own replies",
+        });
+        return;
+      }
+
+      // Soft delete the reply
+      await reply.update({ is_deleted: true });
+
+      // Broadcast deletion via WebSocket
+      const ws = getWebSocketService();
+      if (ws) {
+        ws.broadcastReplyDelete(reply.id, reply.post_id);
+      }
+      res.json({
+        success: true,
+        data: { message: "Reply deleted successfully" },
+      });
+    } catch (error) {
+      console.error("Error deleting reply:", error);
+      res.status(500).json({ success: false, error: "Failed to delete reply" });
     }
   }
 }
