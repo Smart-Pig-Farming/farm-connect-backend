@@ -1274,6 +1274,18 @@ class DiscussionController {
         ? existingVote.vote_type
         : null;
 
+      // DEBUG LOG: baseline state before applying change
+      try {
+        console.log("[votePost][debug] PRE", {
+          postId,
+          userId: req.user.id,
+          incomingVote: vote_type,
+          existingVote: existingVote?.vote_type || null,
+          upvotes: post.upvotes,
+          downvotes: post.downvotes,
+        });
+      } catch {}
+
       // Capture author's points BEFORE scoring (raw points, scaled conversion after fetch)
       let authorPointsBefore: number | undefined = undefined;
       try {
@@ -1330,7 +1342,37 @@ class DiscussionController {
         voteChange[vote_type === "upvote" ? "upvotes" : "downvotes"] = 1;
       }
 
-      await post.increment(voteChange, { transaction });
+      // Atomic recount approach (prevents drift / double increment)
+      const countedUpTx = await UserVote.count({
+        where: { target_type: "post", target_id: postId, vote_type: "upvote" },
+        transaction,
+      });
+      const countedDownTx = await UserVote.count({
+        where: {
+          target_type: "post",
+          target_id: postId,
+          vote_type: "downvote",
+        },
+        transaction,
+      });
+      await post.update(
+        {
+          upvotes: Number(countedUpTx) || 0,
+          downvotes: Number(countedDownTx) || 0,
+        },
+        { transaction }
+      );
+
+      try {
+        console.log("[votePost][debug] APPLY_ATOMIC", {
+          postId,
+          userId: req.user.id,
+          voteChange,
+          finalUserVote,
+          recounted: { up: countedUpTx, down: countedDownTx },
+        });
+      } catch {}
+
       await transaction.commit();
 
       // Compute scoring with correct previous/new states
@@ -1385,6 +1427,53 @@ class DiscussionController {
       const updatedPost = await DiscussionPost.findByPk(postId, {
         attributes: ["upvotes", "downvotes"],
       });
+
+      try {
+        console.log("[votePost][debug] POST", {
+          postId,
+          userId: req.user.id,
+          finalUserVote,
+          persisted: {
+            upvotes: updatedPost?.upvotes,
+            downvotes: updatedPost?.downvotes,
+          },
+        });
+        // Recount actual votes to detect drift
+        const countedUp = await UserVote.count({
+          where: {
+            target_type: "post",
+            target_id: postId,
+            vote_type: "upvote",
+          },
+        });
+        const countedDown = await UserVote.count({
+          where: {
+            target_type: "post",
+            target_id: postId,
+            vote_type: "downvote",
+          },
+        });
+        if (
+          (updatedPost && updatedPost.upvotes !== countedUp) ||
+          (updatedPost && updatedPost.downvotes !== countedDown)
+        ) {
+          console.warn("[votePost][debug][reconcile] mismatch detected", {
+            postId,
+            column: { up: updatedPost?.upvotes, down: updatedPost?.downvotes },
+            recount: { up: countedUp, down: countedDown },
+          });
+          await DiscussionPost.update(
+            { upvotes: countedUp, downvotes: countedDown },
+            { where: { id: postId } }
+          );
+          console.log("[votePost][debug][reconcile] columns corrected");
+          // Update local reference for response
+          if (updatedPost) {
+            updatedPost.upvotes = countedUp;
+            updatedPost.downvotes = countedDown;
+          }
+        }
+      } catch {}
 
       // Construct incremental voter diff (preferred) instead of loading all votes
       let diff:
@@ -2801,6 +2890,7 @@ class DiscussionController {
         include: [
           {
             model: User,
+            as: "user",
             attributes: ["id", "username", "firstname", "lastname"],
           },
         ],
@@ -2814,9 +2904,9 @@ class DiscussionController {
           userId: r.user_id,
           voteType: r.vote_type,
           votedAt: r.created_at,
-          username: r.User?.username,
-          firstname: r.User?.firstname,
-          lastname: r.User?.lastname,
+          username: r.user?.username,
+          firstname: r.user?.firstname,
+          lastname: r.user?.lastname,
         })),
         meta: {
           hasMore: rows.length > lim,
@@ -3217,6 +3307,31 @@ class DiscussionController {
 
       // Soft delete the reply
       await reply.update({ is_deleted: true });
+
+      // Decrement the post's replies_count
+      await DiscussionPost.decrement(
+        { replies_count: 1 },
+        { where: { id: reply.post_id } }
+      );
+
+      // Reconcile reply count to ensure accuracy
+      try {
+        const actualCount = await DiscussionReply.count({
+          where: {
+            post_id: reply.post_id,
+            is_deleted: false,
+          },
+        });
+        await DiscussionPost.update(
+          { replies_count: actualCount },
+          { where: { id: reply.post_id } }
+        );
+        console.log(
+          `[deleteReply] reconciled post ${reply.post_id} replies_count to ${actualCount}`
+        );
+      } catch (e) {
+        console.warn("[deleteReply] reply count reconciliation failed:", e);
+      }
 
       // Broadcast deletion via WebSocket
       const ws = getWebSocketService();

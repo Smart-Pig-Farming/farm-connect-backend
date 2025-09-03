@@ -115,6 +115,21 @@ Notification.init(
     tableName: "notifications",
     timestamps: true,
     underscored: true,
+    hooks: {
+      beforeValidate: (instance: any) => {
+        const now = new Date();
+        if (!instance.created_at) instance.created_at = now;
+        if (!instance.updated_at) instance.updated_at = now;
+      },
+      beforeCreate: (instance: any) => {
+        const now = new Date();
+        if (!instance.created_at) instance.created_at = now;
+        instance.updated_at = now;
+      },
+      beforeUpdate: (instance: any) => {
+        instance.updated_at = new Date();
+      },
+    },
     indexes: [
       {
         fields: ["user_id", "created_at"],
