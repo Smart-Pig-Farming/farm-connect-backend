@@ -12,28 +12,15 @@ import {
 import bcrypt from "bcryptjs";
 import { Op } from "sequelize";
 
-/**
- * Validate admin configuration from environment variables
- */
-function validateAdminConfig(): { email: string; password: string } {
-  const adminEmail = process.env.ADMIN_EMAIL;
-  const adminPassword = process.env.ADMIN_PASSWORD;
+// Admin seed configuration
+// The user requested a single fixed admin account. We still allow env overrides for flexibility.
+const DEFAULT_ADMIN_EMAIL = "piggydata25@gmail.com";
+const DEFAULT_ADMIN_PASSWORD = "Admin123!"; // NOTE: Consider rotating / moving to env in production.
 
-  if (!adminEmail || !adminPassword) {
-    throw new Error(
-      "Environment variables ADMIN_EMAIL and ADMIN_PASSWORD must be set for admin user creation. " +
-        "Ensure ADMIN_EMAIL is a valid email address (e.g., admin@example.com) and ADMIN_PASSWORD is a secure password. " +
-        "You can set these variables in a .env file or as system-level environment variables."
-    );
-  }
-
-  // Basic email validation
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  if (!emailRegex.test(adminEmail)) {
-    throw new Error("ADMIN_EMAIL must be a valid email address.");
-  }
-
-  return { email: adminEmail, password: adminPassword };
+function getAdminConfig(): { email: string; password: string } {
+  const email = process.env.ADMIN_EMAIL || DEFAULT_ADMIN_EMAIL;
+  const password = process.env.ADMIN_PASSWORD || DEFAULT_ADMIN_PASSWORD;
+  return { email, password };
 }
 
 /**
@@ -352,25 +339,21 @@ export async function seedRolePermissions(): Promise<void> {
  */
 export async function seedAdminUser(): Promise<void> {
   try {
-    // Validate admin configuration first
-    const adminConfig = validateAdminConfig();
+    const adminConfig = getAdminConfig();
 
-    // Check if admin user exists with the configured email
     const existingAdmin = await User.findOne({
       where: {
         [Op.or]: [
           { email: adminConfig.email },
           { username: adminConfig.email.split("@")[0] },
-          { username: "admin" }, // Also check for old admin username
+          { username: "admin" },
         ],
       },
     });
 
     if (existingAdmin) {
       console.log("Admin user already exists, skipping seed...");
-      console.log(
-        `Existing admin: ${existingAdmin.email} / ${existingAdmin.username}`
-      );
+      console.log(`Existing admin: ${existingAdmin.email}`);
       return;
     }
 
@@ -381,7 +364,7 @@ export async function seedAdminUser(): Promise<void> {
 
     const hashedPassword = await bcrypt.hash(adminConfig.password, 10);
 
-    const adminUser = await User.create({
+    await User.create({
       firstname: "System",
       lastname: "Administrator",
       email: adminConfig.email,
@@ -391,13 +374,10 @@ export async function seedAdminUser(): Promise<void> {
       is_verified: true,
       is_locked: false,
       points: 0,
-      level_id: 1, // Assuming level 1 exists from basic seeds
+      level_id: 1,
     });
 
-    console.log("Admin user seeded successfully");
-    console.log(
-      `Admin credentials configured with email: ${adminConfig.email}`
-    );
+    console.log(`Admin user seeded/ensured: ${adminConfig.email}`);
   } catch (error) {
     console.error("Error seeding admin user:", error);
     throw error;
@@ -413,8 +393,8 @@ export async function runPermissionSeeds(): Promise<void> {
     await seedResources();
     await seedPermissions();
     await seedRolePermissions();
-    // Skip admin user creation for now
-    console.log("Permission seeds completed (admin user creation skipped)");
+    await seedAdminUser(); // Ensure only the configured admin exists (others not auto-created here)
+    console.log("Permission seeds completed (admin ensured)");
   } catch (error) {
     console.error("Error running permission seeds:", error);
     throw error;

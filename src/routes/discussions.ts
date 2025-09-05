@@ -52,16 +52,37 @@ const updatePostValidation = [
     .optional()
     .isArray({ max: 3 })
     .withMessage("tags must be an array with up to 3 items"),
+  body("is_market_post")
+    .optional()
+    .isBoolean()
+    .withMessage("is_market_post must be a boolean"),
   body("is_available")
     .optional()
     .isBoolean()
     .withMessage("is_available must be a boolean"),
+  // Media update fields (optional)
+  body("removedImages")
+    .optional()
+    .isArray()
+    .withMessage("removedImages must be an array of URLs"),
+  body("removedVideo")
+    .optional()
+    .isBoolean()
+    .withMessage("removedVideo must be a boolean"),
 ];
 
 const createReplyValidation = [
-  body("content")
-    .isLength({ min: 10, max: 2000 })
-    .withMessage("Reply content must be between 10 and 2,000 characters"),
+  body("content").custom((value) => {
+    if (!value || typeof value !== "string" || value.trim().length === 0) {
+      throw new Error(
+        "Reply content cannot be empty or contain only whitespace"
+      );
+    }
+    if (value.length > 2000) {
+      throw new Error("Reply content must not exceed 2,000 characters");
+    }
+    return true;
+  }),
   body("parent_reply_id")
     .optional()
     .isUUID()
@@ -253,6 +274,8 @@ router.patch(
   authenticateWithCookies,
   csrfProtection,
   uuidValidation,
+  // Allow optional media files to be sent with the PATCH request
+  uploadMedia,
   updatePostValidation,
   handleValidationErrors,
   discussionController.updatePost
@@ -310,5 +333,77 @@ router.get(
  * @access  Public
  */
 router.get("/tags", discussionController.getTags);
+
+/**
+ * @route   GET /api/discussions/posts/:id/voters
+ * @desc    Get voters for a specific post
+ * @access  Private (authenticated users only)
+ */
+router.get(
+  "/posts/:id/voters",
+  authenticateWithCookies,
+  discussionController.getPostVoters
+);
+
+/**
+ * @route   GET /api/discussions/replies/:id/voters
+ * @desc    Get voters for a specific reply
+ * @access  Private (authenticated users only)
+ */
+router.get(
+  "/replies/:id/voters",
+  authenticateWithCookies,
+  discussionController.getReplyVoters
+);
+
+/**
+ * @route   POST /api/discussions/replies/voters/bulk
+ * @desc    Bulk fetch voter id arrays for multiple replies
+ * @access  Private (authenticated users only)
+ */
+router.post(
+  "/replies/voters/bulk",
+  authenticateWithCookies,
+  discussionController.getReplyVotersBulk
+);
+
+/**
+ * @route   PATCH /api/discussions/replies/:id
+ * @desc    Update a reply (author only)
+ * @access  Private (authenticated users only)
+ */
+router.patch(
+  "/replies/:id",
+  authenticateWithCookies,
+  csrfProtection,
+  uuidValidation,
+  [
+    body("content")
+      .isLength({ min: 5, max: 2000 })
+      .withMessage("Content must be between 5 and 2000 characters")
+      .custom((value) => {
+        if (!value || value.trim().length === 0) {
+          throw new Error("Content cannot be empty or whitespace only");
+        }
+        return true;
+      }),
+  ],
+  handleValidationErrors,
+  discussionController.updateReply
+);
+
+/**
+ * @route   DELETE /api/discussions/replies/:id
+ * @desc    Delete a reply (author only) - soft delete
+ * @access  Private (authenticated users only)
+ */
+router.delete(
+  "/replies/:id",
+  authenticateWithCookies,
+  csrfProtection,
+  uuidValidation,
+  handleValidationErrors,
+  discussionController.deleteReply
+);
 
 export default router;

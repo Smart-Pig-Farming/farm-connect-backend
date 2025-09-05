@@ -1,7 +1,9 @@
 import { Server } from "socket.io";
 import { Server as HttpServer } from "http";
-import jwt from "jsonwebtoken";
+import * as jwt from "jsonwebtoken";
 import User from "../models/User";
+import { fromScaled } from "./scoring/ScoreTypes";
+import ScoreEvent from "../models/ScoreEvent";
 
 // WebSocket event types
 export interface SocketEvents {
@@ -44,6 +46,9 @@ export interface SocketEvents {
     contentId: string;
     contentType: "post" | "reply";
   }) => void;
+  "moderation:decision": (data: ModerationDecisionEvent) => void;
+  // Scoring (unified batch) events
+  "score:events": (data: { events: ScoreEventWs[] }) => void;
 }
 
 // Data interfaces
@@ -64,6 +69,10 @@ export interface PostCreateData {
   upvotes: number;
   downvotes: number;
   replies_count: number;
+  // Author scoring snapshot (optional)
+  author_points?: number;
+  author_level?: number;
+  author_points_delta?: number; // usually 2 for creation
   // Minimal media info for clients to render without refetching
   media?: Array<{
     id: string | number;
@@ -100,6 +109,28 @@ export interface PostVoteData {
   voteType: "upvote" | "downvote" | null;
   upvotes: number;
   downvotes: number;
+  // Enriched scoring fields
+  previous_vote?: "upvote" | "downvote" | null;
+  is_switch?: boolean;
+  author_points?: number;
+  author_points_delta?: number;
+  author_level?: number;
+  actor_points?: number;
+  actor_points_delta?: number;
+  // Alias used by some frontend handlers; kept for backward compatibility
+  userVote?: "upvote" | "downvote" | null;
+  // Event metadata (optional sequencing / staleness guards on client)
+  emitted_at?: string; // ISO timestamp set server-side if absent
+  // Optional full voter id arrays (used by clients for fallback highlight logic)
+  upvoterIds?: number[];
+  downvoterIds?: number[];
+  // Incremental diff (preferred over full arrays when provided)
+  diff?: {
+    addedUp?: number[];
+    removedUp?: number[];
+    addedDown?: number[];
+    removedDown?: number[];
+  };
 }
 
 export interface ReplyCreateData {
@@ -132,6 +163,26 @@ export interface ReplyVoteData {
   voteType: "upvote" | "downvote" | null;
   upvotes: number;
   downvotes: number;
+  previous_vote?: "upvote" | "downvote" | null;
+  is_switch?: boolean;
+  reply_author_points?: number;
+  reply_author_points_delta?: number;
+  actor_points?: number;
+  actor_points_delta?: number;
+  trickle?: Array<{ userId: number; delta: number }>;
+  reply_classification?: "supportive" | "contradictory" | null;
+  trickle_roles?: {
+    parent?: { userId: number; delta: number };
+    grandparent?: { userId: number; delta: number };
+    root?: { userId: number; delta: number };
+  };
+  userVote?: "upvote" | "downvote" | null;
+  diff?: {
+    addedUp?: number[];
+    removedUp?: number[];
+    addedDown?: number[];
+    removedDown?: number[];
+  };
 }
 
 export interface NotificationData {
@@ -143,7 +194,9 @@ export interface NotificationData {
     | "reply_vote"
     | "post_approved"
     | "mention"
-    | "post_reported";
+    | "post_reported"
+    | "moderation_decision_reporter"
+    | "moderation_decision_owner";
   title: string;
   message: string;
   data: Record<string, any>;
@@ -157,6 +210,29 @@ export interface ContentReportData {
   reason: string;
   details?: string;
   reporterId: number;
+  created_at: string;
+}
+
+export interface ModerationDecisionEvent {
+  postId: string;
+  decision: "retained" | "deleted" | "warned";
+  justification: string;
+  moderatorId: number;
+  decidedAt: string;
+  reportCount: number;
+}
+
+// Unified scoring event (broadcast shape – unscaled deltas & totals)
+export interface ScoreEventWs {
+  id: string;
+  userId: number;
+  actorUserId?: number | null;
+  type: string; // ScoreEventType
+  refType?: string | null;
+  refId?: string | null;
+  delta: number; // unscaled delta
+  totalPoints?: number; // unscaled running total for that user after applying this event batch
+  meta?: any;
   created_at: string;
 }
 
@@ -373,35 +449,49 @@ export class WebSocketService {
   }
 
   public broadcastPostVote(data: PostVoteData) {
-    console.log("📡 Broadcasting post vote:", data.postId, data.voteType);
+    // Enrich with timestamp if not provided to allow clients to perform staleness / ordering guards
+    if (!data.emitted_at) {
+      (data as PostVoteData).emitted_at = new Date().toISOString();
+    }
+    console.log(
+      "📡 Broadcasting post vote:",
+      data.postId,
+      data.voteType,
+      "@",
+      data.emitted_at
+    );
     this.io.emit("post:vote", data);
-    // Also broadcast to specific discussion room
+    // Also broadcast to specific discussion room (room listeners only)
     this.io.to(`post:${data.postId}`).emit("post:vote", data);
   }
 
   public broadcastReplyCreate(data: ReplyCreateData) {
     console.log("📡 Broadcasting new reply:", data.id, "to post", data.postId);
-    this.io.emit("reply:create", data);
-    // Broadcast to specific discussion room
-    this.io.to(`post:${data.postId}`).emit("reply:create", data);
+    // Emit only to room to avoid double delivery (clients listening both globally and in-room produced duplicates)
+    this.io
+      .to(`post:${data.postId}`)
+      .emit("reply:create", { ...data, scope: "room" });
   }
 
   public broadcastReplyUpdate(data: ReplyUpdateData) {
     console.log("📡 Broadcasting reply update:", data.id);
-    this.io.emit("reply:update", data);
-    this.io.to(`post:${data.postId}`).emit("reply:update", data);
+    this.io
+      .to(`post:${data.postId}`)
+      .emit("reply:update", { ...data, scope: "room" });
   }
 
   public broadcastReplyDelete(replyId: string, postId: string) {
     console.log("📡 Broadcasting reply deletion:", replyId);
-    this.io.emit("reply:delete", { replyId, postId });
-    this.io.to(`post:${postId}`).emit("reply:delete", { replyId, postId });
+    this.io
+      .to(`post:${postId}`)
+      .emit("reply:delete", { replyId, postId, scope: "room" });
   }
 
   public broadcastReplyVote(data: ReplyVoteData) {
     console.log("📡 Broadcasting reply vote:", data.replyId, data.voteType);
-    this.io.emit("reply:vote", data);
-    this.io.to(`post:${data.postId}`).emit("reply:vote", data);
+    this.io
+      .to(`post:${data.postId}`)
+      .emit("reply:vote", { ...data, scope: "room" });
   }
 
   public sendNotificationToUser(
@@ -435,6 +525,53 @@ export class WebSocketService {
   ) {
     console.log("⚖️ Broadcasting content moderation:", contentId, action);
     this.io.emit(`moderation:content_${action}`, { contentId, contentType });
+  }
+
+  public broadcastModerationDecision(data: ModerationDecisionEvent) {
+    console.log(
+      "📡 Broadcasting moderation decision:",
+      data.postId,
+      data.decision
+    );
+    this.io.emit("moderation:decision", data);
+  }
+
+  /**
+   * Broadcast a batch of score events produced by a single logical scoring action.
+   * The caller supplies the raw ScoreEvent instances and the updated totals (scaled).
+   */
+  public broadcastScoreEvents(batch: {
+    events: ScoreEvent[];
+    totals: { userId: number; totalPoints: number }[];
+  }) {
+    if (!batch?.events?.length) return;
+    try {
+      const totalMap = new Map<number, number>();
+      batch.totals.forEach((t) => {
+        totalMap.set(t.userId, fromScaled(t.totalPoints));
+      });
+      const out: ScoreEventWs[] = batch.events.map((ev) => {
+        const createdAt: any = (ev as any).created_at || (ev as any).createdAt;
+        return {
+          id: ev.id,
+          userId: (ev as any).user_id,
+          actorUserId: (ev as any).actor_user_id ?? null,
+          type: (ev as any).event_type,
+          refType: (ev as any).ref_type ?? null,
+          refId: (ev as any).ref_id ?? null,
+          delta: fromScaled((ev as any).delta),
+          totalPoints: totalMap.get((ev as any).user_id),
+          meta: (ev as any).meta || null,
+          created_at: createdAt
+            ? new Date(createdAt).toISOString()
+            : new Date().toISOString(),
+        };
+      });
+      console.log("📡 Broadcasting score events batch (count=)", out.length);
+      this.io.emit("score:events", { events: out });
+    } catch (e) {
+      console.error("[ws] failed to broadcast score events", e);
+    }
   }
 
   // Utility methods

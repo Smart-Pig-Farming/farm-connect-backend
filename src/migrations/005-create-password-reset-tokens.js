@@ -52,11 +52,26 @@ module.exports = {
       },
     });
 
-    // Add indexes for better performance
-    await queryInterface.addIndex("password_reset_tokens", ["email"]);
-    await queryInterface.addIndex("password_reset_tokens", ["otp"]);
-    await queryInterface.addIndex("password_reset_tokens", ["expires_at"]);
-    await queryInterface.addIndex("password_reset_tokens", ["user_id"]);
+    // Add indexes (idempotent) supporting both snake_case and potential legacy camelCase columns.
+    await queryInterface.sequelize.query(`DO $$
+    BEGIN
+      IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='password_reset_tokens' AND column_name='email') THEN
+        EXECUTE 'CREATE INDEX IF NOT EXISTS password_reset_tokens_email ON password_reset_tokens (email)';
+      END IF;
+      IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='password_reset_tokens' AND column_name='otp') THEN
+        EXECUTE 'CREATE INDEX IF NOT EXISTS password_reset_tokens_otp ON password_reset_tokens (otp)';
+      END IF;
+      IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='password_reset_tokens' AND column_name='user_id') THEN
+        EXECUTE 'CREATE INDEX IF NOT EXISTS password_reset_tokens_user_id ON password_reset_tokens (user_id)';
+      ELSIF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='password_reset_tokens' AND column_name='userId') THEN
+        EXECUTE 'CREATE INDEX IF NOT EXISTS password_reset_tokens_user_id ON password_reset_tokens ("userId")';
+      END IF;
+      IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='password_reset_tokens' AND column_name='expires_at') THEN
+        EXECUTE 'CREATE INDEX IF NOT EXISTS password_reset_tokens_expires_at ON password_reset_tokens (expires_at)';
+      ELSIF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='password_reset_tokens' AND column_name='expiresAt') THEN
+        EXECUTE 'CREATE INDEX IF NOT EXISTS password_reset_tokens_expires_at ON password_reset_tokens ("expiresAt")';
+      END IF;
+    END$$;`);
   },
 
   async down(queryInterface, Sequelize) {

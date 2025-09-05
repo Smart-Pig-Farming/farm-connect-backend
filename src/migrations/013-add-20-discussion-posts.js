@@ -4,309 +4,236 @@ module.exports = {
   up: async (queryInterface, Sequelize) => {
     const { v4: uuidv4 } = require("uuid");
 
-    // Post data with realistic pig farming content
-    const posts = [
+    // Fetch existing users to avoid FK violations. We previously relied on specific numeric IDs
+    // that are no longer guaranteed (now only an admin may exist during migrations).
+    const existingUsers = await queryInterface.sequelize.query(
+      "SELECT id FROM users ORDER BY id ASC",
+      { type: Sequelize.QueryTypes.SELECT }
+    );
+
+    if (!existingUsers.length) {
+      console.log(
+        "[013-add-20-discussion-posts] No users present. Skipping seed posts to avoid FK errors."
+      );
+      return;
+    }
+
+    const userIds = existingUsers.map((u) => u.id);
+    const fallbackUserId = userIds[0];
+    // Helper to pick a user id if available else fallback
+    const pick = (preferred) =>
+      userIds.includes(preferred) ? preferred : fallbackUserId;
+
+    // Original intended author IDs for variety
+    const intended = [
+      2, 3, 4, 7, 6, 5, 2, 3, 4, 7, 6, 5, 2, 3, 7, 4, 6, 5, 2, 3,
+    ];
+
+    const daysAgo = (n) => new Date(Date.now() - n * 24 * 60 * 60 * 1000);
+
+    const basePosts = [
       {
-        id: uuidv4(),
         title: "Best feeding practices for weaned piglets",
-        content:
-          "What are your experiences with transitioning piglets from mother's milk to solid feed? I've been having some challenges with post-weaning diarrhea and would love to hear what feeding strategies have worked for you.",
-        author_id: 2, // John Keller
         upvotes: 23,
         downvotes: 1,
         is_market_post: false,
-        is_available: true,
         is_approved: true,
-        is_deleted: false,
-        created_at: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000), // 2 days ago
-        updated_at: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000),
       },
       {
-        id: uuidv4(),
         title: "Quality pig feed supplier needed in Musanze",
-        content:
-          "Looking for reliable feed suppliers in the Northern Province. I need consistent quality for my 80-pig operation. Budget is around 800,000 RWF monthly. Please contact if you can deliver quality feeds.",
-        author_id: 3, // Sally Ulrich
         upvotes: 15,
         downvotes: 0,
         is_market_post: true,
-        is_available: true,
         is_approved: false,
-        is_deleted: false,
-        created_at: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000), // 3 days ago
-        updated_at: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000),
       },
       {
-        id: uuidv4(),
         title: "Modern pig housing designs that work in Rwanda",
-        content:
-          "I'm expanding my farm and need advice on housing designs that work well in our climate. Looking for cost-effective but efficient designs that can house 50+ pigs. Any recommendations?",
-        author_id: 4, // Ethel Bassey
         upvotes: 31,
         downvotes: 2,
         is_market_post: false,
-        is_available: true,
         is_approved: true,
-        is_deleted: false,
-        created_at: new Date(Date.now() - 4 * 24 * 60 * 60 * 1000), // 4 days ago
-        updated_at: new Date(Date.now() - 4 * 24 * 60 * 60 * 1000),
       },
       {
-        id: uuidv4(),
         title: "Vaccination schedule for commercial pig farms",
-        content:
-          "What vaccination protocols do you follow for your commercial operations? I'm particularly interested in preventing Classical Swine Fever and other common diseases in Rwanda.",
-        author_id: 7, // Sarah Expert
         upvotes: 67,
         downvotes: 3,
         is_market_post: false,
-        is_available: true,
         is_approved: true,
-        is_deleted: false,
-        created_at: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000), // 5 days ago
-        updated_at: new Date(Date.now() - 5 * 24 * 60 * 60 * 1000),
       },
       {
-        id: uuidv4(),
         title: "Breeding boars for sale - Landrace x Yorkshire",
-        content:
-          "I have 3 high-quality breeding boars available. They are 8-10 months old, healthy, and from excellent bloodlines. Located in Kigali. Price: 180,000 RWF each or best offer.",
-        author_id: 6, // John Farmer
         upvotes: 12,
         downvotes: 1,
         is_market_post: true,
-        is_available: true,
         is_approved: true,
-        is_deleted: false,
-        created_at: new Date(Date.now() - 6 * 24 * 60 * 60 * 1000), // 6 days ago
-        updated_at: new Date(Date.now() - 6 * 24 * 60 * 60 * 1000),
       },
       {
-        id: uuidv4(),
         title: "Managing heat stress in pigs during dry season",
-        content:
-          "The dry season is approaching and I'm concerned about heat stress in my pigs. What cooling methods have you found most effective and affordable for small to medium farms?",
-        author_id: 5, // Jean De Dieu Alvirisi
         upvotes: 28,
         downvotes: 0,
         is_market_post: false,
-        is_available: true,
         is_approved: true,
-        is_deleted: false,
-        created_at: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000), // 7 days ago
-        updated_at: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
       },
       {
-        id: uuidv4(),
         title: "Pig farming equipment auction - Huye District",
-        content:
-          "Due to farm relocation, I'm selling various pig farming equipment including feeders, waterers, and housing materials. Auction will be held this Saturday. Serious buyers only.",
-        author_id: 2, // John Keller
         upvotes: 8,
         downvotes: 0,
         is_market_post: true,
-        is_available: true,
         is_approved: false,
-        is_deleted: false,
-        created_at: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000), // 8 days ago
-        updated_at: new Date(Date.now() - 8 * 24 * 60 * 60 * 1000),
       },
       {
-        id: uuidv4(),
         title: "Profitable pig breeds for Rwandan climate",
-        content:
-          "I'm starting my pig farming journey and wondering which breeds perform best in Rwanda. Looking for breeds that are hardy, fast-growing, and have good market demand.",
-        author_id: 3, // Sally Ulrich
         upvotes: 45,
         downvotes: 2,
         is_market_post: false,
-        is_available: true,
         is_approved: true,
-        is_deleted: false,
-        created_at: new Date(Date.now() - 9 * 24 * 60 * 60 * 1000), // 9 days ago
-        updated_at: new Date(Date.now() - 9 * 24 * 60 * 60 * 1000),
       },
       {
-        id: uuidv4(),
         title: "Organic pig feed ingredients sourced locally",
-        content:
-          "Has anyone experimented with locally sourced organic feed ingredients? I'm interested in reducing feed costs while maintaining quality. Looking for sustainable alternatives.",
-        author_id: 4, // Ethel Bassey
         upvotes: 19,
         downvotes: 1,
         is_market_post: false,
-        is_available: true,
         is_approved: true,
-        is_deleted: false,
-        created_at: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000), // 10 days ago
-        updated_at: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000),
       },
       {
-        id: uuidv4(),
         title: "Pregnant sows for sale - Due in 3 weeks",
-        content:
-          "I have 4 pregnant sows (Yorkshire x Local cross) due to farrow in approximately 3 weeks. Healthy animals with good farrowing history. 220,000 RWF each. Located near Nyagatare.",
-        author_id: 7, // Sarah Expert
         upvotes: 16,
         downvotes: 0,
         is_market_post: true,
-        is_available: true,
         is_approved: true,
-        is_deleted: false,
-        created_at: new Date(Date.now() - 11 * 24 * 60 * 60 * 1000), // 11 days ago
-        updated_at: new Date(Date.now() - 11 * 24 * 60 * 60 * 1000),
       },
       {
-        id: uuidv4(),
         title: "Biosecurity measures for small pig farms",
-        content:
-          "What biosecurity protocols do you implement on your farms? I want to protect my pigs from diseases but need practical measures that won't break the bank for a small operation.",
-        author_id: 6, // John Farmer
         upvotes: 34,
         downvotes: 1,
         is_market_post: false,
-        is_available: true,
         is_approved: true,
-        is_deleted: false,
-        created_at: new Date(Date.now() - 12 * 24 * 60 * 60 * 1000), // 12 days ago
-        updated_at: new Date(Date.now() - 12 * 24 * 60 * 60 * 1000),
       },
       {
-        id: uuidv4(),
         title: "Pig manure management and composting tips",
-        content:
-          "Looking for efficient ways to manage pig manure on my farm. Interested in composting methods that can turn waste into valuable fertilizer. Any success stories?",
-        author_id: 5, // Jean De Dieu Alvirisi
         upvotes: 22,
         downvotes: 0,
         is_market_post: false,
-        is_available: true,
         is_approved: true,
-        is_deleted: false,
-        created_at: new Date(Date.now() - 13 * 24 * 60 * 60 * 1000), // 13 days ago
-        updated_at: new Date(Date.now() - 13 * 24 * 60 * 60 * 1000),
       },
       {
-        id: uuidv4(),
         title: "Mobile pig slaughter services in Eastern Province",
-        content:
-          "Offering mobile slaughter services for small to medium pig farms in Eastern Province. Hygienic processing, fair prices, and we handle all documentation. Contact for rates.",
-        author_id: 2, // John Keller
         upvotes: 9,
         downvotes: 2,
         is_market_post: true,
-        is_available: true,
         is_approved: false,
-        is_deleted: false,
-        created_at: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000), // 14 days ago
-        updated_at: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000),
       },
       {
-        id: uuidv4(),
         title: "Water quality and consumption for pigs",
-        content:
-          "How do you ensure water quality for your pigs? What are the daily water requirements per pig, and what filtration or treatment methods do you recommend?",
-        author_id: 3, // Sally Ulrich
         upvotes: 17,
         downvotes: 0,
         is_market_post: false,
-        is_available: true,
         is_approved: true,
-        is_deleted: false,
-        created_at: new Date(Date.now() - 15 * 24 * 60 * 60 * 1000), // 15 days ago
-        updated_at: new Date(Date.now() - 15 * 24 * 60 * 60 * 1000),
       },
       {
-        id: uuidv4(),
         title: "Pig farming training workshop - Kigali",
-        content:
-          "Announcing a comprehensive pig farming workshop covering breeding, feeding, health management, and marketing. September 15-17 in Kigali. Early bird discount available!",
-        author_id: 7, // Sarah Expert
         upvotes: 52,
         downvotes: 1,
         is_market_post: false,
-        is_available: true,
         is_approved: true,
-        is_deleted: false,
-        created_at: new Date(Date.now() - 16 * 24 * 60 * 60 * 1000), // 16 days ago
-        updated_at: new Date(Date.now() - 16 * 24 * 60 * 60 * 1000),
       },
       {
-        id: uuidv4(),
         title: "Piglet starter feed - high quality, competitive prices",
-        content:
-          "New shipment of premium piglet starter feed just arrived. Specially formulated for optimal growth in the first 8 weeks. 25kg bags at 22,000 RWF. Delivery available in Kigali area.",
-        author_id: 4, // Ethel Bassey
         upvotes: 11,
         downvotes: 0,
         is_market_post: true,
-        is_available: true,
         is_approved: true,
-        is_deleted: false,
-        created_at: new Date(Date.now() - 17 * 24 * 60 * 60 * 1000), // 17 days ago
-        updated_at: new Date(Date.now() - 17 * 24 * 60 * 60 * 1000),
       },
       {
-        id: uuidv4(),
         title: "Record keeping systems for pig farms",
-        content:
-          "What record keeping systems do you use to track breeding, feeding, health treatments, and finances? Looking for simple but effective methods for a 40-pig operation.",
-        author_id: 6, // John Farmer
         upvotes: 25,
         downvotes: 1,
         is_market_post: false,
-        is_available: true,
         is_approved: true,
-        is_deleted: false,
-        created_at: new Date(Date.now() - 18 * 24 * 60 * 60 * 1000), // 18 days ago
-        updated_at: new Date(Date.now() - 18 * 24 * 60 * 60 * 1000),
       },
       {
-        id: uuidv4(),
         title: "Emergency veterinary services - Northern Province",
-        content:
-          "Experienced livestock veterinarian offering emergency and routine services for pig farms in Northern Province. 24/7 availability for critical cases. Competitive rates.",
-        author_id: 5, // Jean De Dieu Alvirisi
         upvotes: 14,
         downvotes: 0,
         is_market_post: true,
-        is_available: true,
         is_approved: false,
-        is_deleted: false,
-        created_at: new Date(Date.now() - 19 * 24 * 60 * 60 * 1000), // 19 days ago
-        updated_at: new Date(Date.now() - 19 * 24 * 60 * 60 * 1000),
       },
       {
-        id: uuidv4(),
         title: "Pig weight estimation without scales",
-        content:
-          "Share your methods for estimating pig weight without expensive scales. I've heard about heart girth measurements but would love to hear about other practical techniques.",
-        author_id: 2, // John Keller
         upvotes: 33,
         downvotes: 2,
         is_market_post: false,
-        is_available: true,
         is_approved: true,
-        is_deleted: false,
-        created_at: new Date(Date.now() - 20 * 24 * 60 * 60 * 1000), // 20 days ago
-        updated_at: new Date(Date.now() - 20 * 24 * 60 * 60 * 1000),
       },
       {
-        id: uuidv4(),
         title: "Seasonal pricing trends for live pigs",
-        content:
-          "What patterns have you noticed in pig prices throughout the year? I'm trying to optimize my marketing strategy and would appreciate insights on the best times to sell.",
-        author_id: 3, // Sally Ulrich
         upvotes: 29,
         downvotes: 1,
         is_market_post: false,
-        is_available: true,
         is_approved: true,
-        is_deleted: false,
-        created_at: new Date(Date.now() - 21 * 24 * 60 * 60 * 1000), // 21 days ago
-        updated_at: new Date(Date.now() - 21 * 24 * 60 * 60 * 1000),
       },
     ];
+
+    const posts = basePosts.map((p, idx) => ({
+      id: uuidv4(),
+      title: p.title,
+      content: (() => {
+        // reuse original long-form content when possible (kept below in tag associations section for reference)
+        switch (idx) {
+          case 0:
+            return "What are your experiences with transitioning piglets from mother's milk to solid feed? I've been having some challenges with post-weaning diarrhea and would love to hear what feeding strategies have worked for you.";
+          case 1:
+            return "Looking for reliable feed suppliers in the Northern Province. I need consistent quality for my 80-pig operation. Budget is around 800,000 RWF monthly. Please contact if you can deliver quality feeds.";
+          case 2:
+            return "I'm expanding my farm and need advice on housing designs that work well in our climate. Looking for cost-effective but efficient designs that can house 50+ pigs. Any recommendations?";
+          case 3:
+            return "What vaccination protocols do you follow for your commercial operations? I'm particularly interested in preventing Classical Swine Fever and other common diseases in Rwanda.";
+          case 4:
+            return "I have 3 high-quality breeding boars available. They are 8-10 months old, healthy, and from excellent bloodlines. Located in Kigali. Price: 180,000 RWF each or best offer.";
+          case 5:
+            return "The dry season is approaching and I'm concerned about heat stress in my pigs. What cooling methods have you found most effective and affordable for small to medium farms?";
+          case 6:
+            return "Due to farm relocation, I'm selling various pig farming equipment including feeders, waterers, and housing materials. Auction will be held this Saturday. Serious buyers only.";
+          case 7:
+            return "I'm starting my pig farming journey and wondering which breeds perform best in Rwanda. Looking for breeds that are hardy, fast-growing, and have good market demand.";
+          case 8:
+            return "Has anyone experimented with locally sourced organic feed ingredients? I'm interested in reducing feed costs while maintaining quality. Looking for sustainable alternatives.";
+          case 9:
+            return "I have 4 pregnant sows (Yorkshire x Local cross) due to farrow in approximately 3 weeks. Healthy animals with good farrowing history. 220,000 RWF each. Located near Nyagatare.";
+          case 10:
+            return "What biosecurity protocols do you implement on your farms? I want to protect my pigs from diseases but need practical measures that won't break the bank for a small operation.";
+          case 11:
+            return "Looking for efficient ways to manage pig manure on my farm. Interested in composting methods that can turn waste into valuable fertilizer. Any success stories?";
+          case 12:
+            return "Offering mobile slaughter services for small to medium pig farms in Eastern Province. Hygienic processing, fair prices, and we handle all documentation. Contact for rates.";
+          case 13:
+            return "How do you ensure water quality for your pigs? What are the daily water requirements per pig, and what filtration or treatment methods do you recommend?";
+          case 14:
+            return "Announcing a comprehensive pig farming workshop covering breeding, feeding, health management, and marketing. September 15-17 in Kigali. Early bird discount available!";
+          case 15:
+            return "New shipment of premium piglet starter feed just arrived. Specially formulated for optimal growth in the first 8 weeks. 25kg bags at 22,000 RWF. Delivery available in Kigali area.";
+          case 16:
+            return "What record keeping systems do you use to track breeding, feeding, health treatments, and finances? Looking for simple but effective methods for a 40-pig operation.";
+          case 17:
+            return "Experienced livestock veterinarian offering emergency and routine services for pig farms in Northern Province. 24/7 availability for critical cases. Competitive rates.";
+          case 18:
+            return "Share your methods for estimating pig weight without expensive scales. I've heard about heart girth measurements but would love to hear about other practical techniques.";
+          case 19:
+            return "What patterns have you noticed in pig prices throughout the year? I'm trying to optimize my marketing strategy and would appreciate insights on the best times to sell.";
+          default:
+            return p.title;
+        }
+      })(),
+      author_id: pick(intended[idx]),
+      upvotes: p.upvotes,
+      downvotes: p.downvotes,
+      is_market_post: p.is_market_post,
+      is_available: p.is_market_post ? true : false,
+      is_approved: p.is_approved,
+      is_deleted: false,
+      created_at: daysAgo(idx + 2), // preserve staggered distribution
+      updated_at: daysAgo(idx + 2),
+    }));
 
     // Insert posts
     await queryInterface.bulkInsert("discussion_posts", posts);

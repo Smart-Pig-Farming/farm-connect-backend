@@ -1,7 +1,10 @@
 import { getWebSocketService, NotificationData } from "./webSocketService";
+import { randomUUID } from "crypto";
 import User from "../models/User";
 import DiscussionPost from "../models/DiscussionPost";
 import DiscussionReply from "../models/DiscussionReply";
+import Notification from "../models/Notification";
+import { Op } from "sequelize";
 
 export interface NotificationPayload {
   recipientId: number;
@@ -11,7 +14,9 @@ export interface NotificationPayload {
     | "reply_vote"
     | "post_approved"
     | "mention"
-    | "post_reported";
+    | "post_reported"
+    | "moderation_decision_reporter"
+    | "moderation_decision_owner";
   triggerUserId: number;
   data: {
     postId?: string;
@@ -20,6 +25,8 @@ export interface NotificationPayload {
     contentPreview?: string;
     voteType?: "upvote" | "downvote";
     reportReason?: string;
+    decision?: "retained" | "deleted" | "warned";
+    justification?: string;
   };
 }
 
@@ -45,8 +52,11 @@ class NotificationService {
         triggerUser
       );
 
+      // Use a proper UUID so it persists cleanly into the notifications table (UUID PK)
+      const notificationId = randomUUID();
+
       const notification: NotificationData = {
-        id: `notif_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+        id: notificationId,
         userId: payload.recipientId,
         type: payload.type,
         title: notificationContent.title,
@@ -68,8 +78,8 @@ class NotificationService {
         notification
       );
 
-      // Here you would typically also save to database
-      // await this.saveNotificationToDatabase(notification);
+      // Save to database for persistence
+      await this.saveNotificationToDatabase(notification);
 
       console.log(
         `📬 Notification sent to user ${payload.recipientId}: ${notification.title}`
@@ -132,6 +142,22 @@ class NotificationService {
         return {
           title: "Content reported",
           message: `Your post "${data.postTitle}" was reported for: ${data.reportReason}`,
+        };
+
+      case "moderation_decision_reporter":
+        return {
+          title: "Update on your report",
+          message: `Post "${data.postTitle}" decision: ${
+            data.decision
+          }. Reason: ${data.justification || "No additional details"}`,
+        };
+
+      case "moderation_decision_owner":
+        return {
+          title: "Moderation decision on your post",
+          message: `Your post "${data.postTitle}" was ${
+            data.decision
+          }. Reason: ${data.justification || "No additional details"}`,
         };
 
       default:
@@ -384,9 +410,63 @@ class NotificationService {
    * Get notification count for a user (for badges)
    */
   async getUnreadNotificationCount(userId: number): Promise<number> {
-    // This would query the database for unread notifications
-    // For now, return 0 as we haven't implemented database storage
-    return 0;
+    try {
+      const count = await Notification.count({
+        where: {
+          user_id: userId,
+          read: false,
+        },
+      });
+      return count;
+    } catch (error) {
+      console.error("Error getting unread notification count:", error);
+      return 0;
+    }
+  }
+
+  /**
+   * Get user notifications with pagination
+   */
+  async getUserNotifications(
+    userId: number,
+    page: number = 1,
+    limit: number = 20
+  ): Promise<{
+    notifications: any[];
+    total: number;
+    unreadCount: number;
+  }> {
+    try {
+      const offset = (page - 1) * limit;
+
+      const [notifications, total, unreadCount] = await Promise.all([
+        Notification.findAll({
+          where: { user_id: userId },
+          order: [["created_at", "DESC"]],
+          limit,
+          offset,
+        }),
+        Notification.count({ where: { user_id: userId } }),
+        Notification.count({ where: { user_id: userId, read: false } }),
+      ]);
+
+      return {
+        notifications: notifications.map((n) => ({
+          id: n.id,
+          type: n.type,
+          title: n.title,
+          message: n.message,
+          data: n.data,
+          read: n.read,
+          createdAt: n.created_at.toISOString(),
+        })),
+        total,
+        unreadCount,
+      };
+    } catch (error) {
+      console.error("Error getting user notifications:", error);
+      return { notifications: [], total: 0, unreadCount: 0 };
+    }
   }
 
   /**
@@ -396,11 +476,81 @@ class NotificationService {
     userId: number,
     notificationIds: string[]
   ): Promise<void> {
-    // This would update the database to mark notifications as read
-    console.log(
-      `Marking notifications as read for user ${userId}:`,
-      notificationIds
-    );
+    try {
+      await Notification.update(
+        { read: true },
+        {
+          where: {
+            user_id: userId,
+            id: {
+              [Op.in]: notificationIds,
+            },
+          },
+        }
+      );
+      console.log(
+        `Marked ${notificationIds.length} notifications as read for user ${userId}`
+      );
+    } catch (error) {
+      console.error("Error marking notifications as read:", error);
+    }
+  }
+
+  /**
+   * Mark all notifications as read for a user
+   */
+  async markAllNotificationsAsRead(userId: number): Promise<void> {
+    try {
+      await Notification.update(
+        { read: true },
+        {
+          where: {
+            user_id: userId,
+            read: false,
+          },
+        }
+      );
+      console.log(`Marked all notifications as read for user ${userId}`);
+    } catch (error) {
+      console.error("Error marking all notifications as read:", error);
+    }
+  }
+
+  /**
+   * Clear all notifications for a user (delete from database)
+   */
+  async clearAllNotifications(userId: number): Promise<void> {
+    try {
+      await Notification.destroy({
+        where: {
+          user_id: userId,
+        },
+      });
+      console.log(`Cleared all notifications for user ${userId}`);
+    } catch (error) {
+      console.error("Error clearing all notifications:", error);
+    }
+  }
+
+  /**
+   * Save notification to database
+   */
+  private async saveNotificationToDatabase(
+    notification: NotificationData
+  ): Promise<void> {
+    try {
+      await Notification.create({
+        id: notification.id, // already a UUID
+        user_id: notification.userId,
+        type: notification.type,
+        title: notification.title,
+        message: notification.message,
+        data: notification.data,
+        read: false,
+      });
+    } catch (error) {
+      console.error("Error saving notification to database:", error);
+    }
   }
 }
 

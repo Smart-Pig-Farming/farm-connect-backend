@@ -1,5 +1,6 @@
 import Role from "../models/Role";
 import Level from "../models/Level";
+import Tag from "../models/Tag";
 
 export async function seedRoles(): Promise<void> {
   try {
@@ -88,9 +89,35 @@ export async function runBasicSeeds(): Promise<void> {
     console.log("Starting basic seed process...");
     await seedRoles();
     await seedLevels();
+    await seedTags();
     console.log("Basic seed process completed successfully");
   } catch (error) {
     console.error("Error running basic seeds:", error);
     throw error;
+  }
+}
+
+// Seed baseline discussion tags
+export async function seedTags(): Promise<void> {
+  try {
+    const existing = await Tag.count();
+    if (existing > 0) {
+      console.log("Tags already exist, skipping seed...");
+      return;
+    }
+    const tags = [
+      { name: "breeding", color: "green" },
+      { name: "equipment", color: "gray" },
+      { name: "events", color: "purple" },
+      { name: "feed", color: "orange" },
+      { name: "general", color: "blue" },
+      { name: "health", color: "red" },
+      { name: "market", color: "teal" },
+    ];
+    await Tag.bulkCreate(tags);
+    console.log("Tags seeded successfully");
+  } catch (e) {
+    console.error("Error seeding tags:", e);
+    throw e;
   }
 }

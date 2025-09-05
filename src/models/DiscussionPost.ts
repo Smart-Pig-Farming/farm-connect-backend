@@ -129,7 +129,7 @@ DiscussionPost.init(
     },
     is_available: {
       type: DataTypes.BOOLEAN,
-      defaultValue: true,
+      defaultValue: false,
       allowNull: false,
     },
     is_approved: {
@@ -180,5 +180,20 @@ DiscussionPost.init(
     ],
   }
 );
+
+// Enforce business rule: is_available => is_market_post
+DiscussionPost.addHook("beforeValidate", (post: any) => {
+  if (!post.is_market_post) {
+    // Force availability false for non-market posts
+    post.is_available = false;
+  }
+});
+
+DiscussionPost.addHook("beforeSave", (post: any) => {
+  if (post.is_available && !post.is_market_post) {
+    // Safety net: cannot have available true if not a market post
+    post.is_available = false;
+  }
+});
 
 export default DiscussionPost;

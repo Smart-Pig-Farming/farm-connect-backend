@@ -62,7 +62,8 @@ Quiz.init(
     duration: {
       type: DataTypes.INTEGER,
       allowNull: false,
-      defaultValue: 30, // 30 minutes default
+      defaultValue: 10, // 10 minutes default (600 seconds per attempt)
+      validate: { min: 1, max: 600 },
     },
     passing_score: {
       type: DataTypes.INTEGER,

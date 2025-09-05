@@ -9,6 +9,7 @@ import { createServer, Server as HttpServer } from "http";
 import { initializeWebSocket } from "./services/webSocketService";
 import { runBasicSeeds } from "./seeders/basicSeeds";
 import { runPermissionSeeds } from "./seeders/permissionSeeds";
+// Importing models side-effect registers them with sequelize (already imported below with ./models)
 import sequelize from "./config/database";
 import "./models"; // Import all models to register associations
 
@@ -21,6 +22,12 @@ import authRoutes from "./routes/auth";
 import adminRoutes from "./routes/admin";
 import testRoutes from "./routes/test";
 import discussionRoutes from "./routes/discussions";
+import moderationRoutes from "./routes/moderation";
+import notificationRoutes from "./routes/notifications";
+import scoreRoutes from "./routes/score";
+import bestPracticeRoutes from "./routes/bestPractices";
+import quizRoutes from "./routes/quizzes";
+import chatRoutes from "./routes/chat";
 
 class App {
   public app: Application;
@@ -54,6 +61,9 @@ class App {
       await sequelize.authenticate();
       console.log("Database connection authenticated successfully");
 
+      // Ensure all model tables exist if missing (post-drop convenience)
+      await this.ensureAllModelTables();
+
       // Run basic seeds (roles and levels)
       await runBasicSeeds();
 
@@ -67,6 +77,94 @@ class App {
     } catch (error) {
       console.error("Failed to initialize database connection:", error);
       process.exit(1);
+    }
+  }
+
+  private async ensureAllModelTables(): Promise<void> {
+    // Allow disabling via env
+    if ((process.env.AUTO_CREATE_TABLES || "true").toLowerCase() === "false") {
+      console.log("Auto table creation disabled (AUTO_CREATE_TABLES=false)");
+      return;
+    }
+
+    const models = sequelize.modelManager.models;
+    if (!models.length) {
+      console.warn("No models registered; cannot ensure tables");
+      return;
+    }
+
+    // Helper to check table existence via to_regclass
+    async function tableExists(tableName: string): Promise<boolean> {
+      const safe = tableName.replace(/"/g, "");
+      const [res]: any = await sequelize.query(
+        `SELECT to_regclass('public.${safe}') as exists`
+      );
+      return res[0]?.exists !== null;
+    }
+
+    // Build initial status map
+    const pending = new Set<string>();
+    const modelMap: Record<string, any> = {};
+    for (const m of models) {
+      const tn =
+        typeof m.getTableName === "function"
+          ? m.getTableName()
+          : (m as any).tableName;
+      const tableName = typeof tn === "object" ? tn.tableName : tn;
+      modelMap[tableName] = m;
+      pending.add(tableName);
+    }
+
+    let pass = 0;
+    const created: string[] = [];
+    const failedLastPass: string[] = [];
+
+    while (pending.size) {
+      pass++;
+      let progress = false;
+      for (const tableName of Array.from(pending)) {
+        const exists = await tableExists(tableName);
+        if (exists) {
+          pending.delete(tableName);
+          continue;
+        }
+        try {
+          await modelMap[tableName].sync({ alter: false });
+          console.log(`Created missing table '${tableName}'`);
+          created.push(tableName);
+          pending.delete(tableName);
+          progress = true;
+        } catch (err: any) {
+          // Likely dependency not yet created; defer
+          failedLastPass.push(tableName);
+        }
+      }
+      if (!progress) {
+        // Attempt one more forced sync() for remaining models collectively
+        try {
+          await sequelize.sync({ alter: false });
+          // Re-check remaining
+          for (const t of Array.from(pending)) {
+            if (await tableExists(t)) {
+              pending.delete(t);
+              created.push(t);
+            }
+          }
+        } catch {}
+        break;
+      }
+    }
+
+    if (pending.size) {
+      console.warn(
+        `Some tables could not be auto-created (likely due to complex constraints): ${Array.from(
+          pending
+        ).join(", ")}. Run migrations to resolve.`
+      );
+    } else if (created.length) {
+      console.log(`Auto-created tables: ${created.join(", ")}`);
+    } else {
+      console.log("All model tables already existed");
     }
   }
 
@@ -105,6 +203,24 @@ class App {
 
     // Discussion routes
     this.app.use("/api/discussions", discussionRoutes);
+
+    // Moderation routes
+    this.app.use("/api/moderation", moderationRoutes);
+
+    // Notification routes
+    this.app.use("/api/notifications", notificationRoutes);
+
+    // Scoring routes (phase 1 minimal)
+    this.app.use("/api/score", scoreRoutes);
+
+    // Best Practices routes
+    this.app.use("/api/best-practices", bestPracticeRoutes);
+
+    // Quiz routes
+    this.app.use("/api/quizzes", quizRoutes);
+
+    // Chat routes
+    this.app.use("/api/chat", chatRoutes);
 
     // Test routes (for development/testing)
     this.app.use("/api/test", testRoutes);

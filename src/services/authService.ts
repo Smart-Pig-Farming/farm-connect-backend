@@ -409,6 +409,13 @@ class AuthService {
     // Get user permissions
     const permissions = await this.getUserPermissions(user.id);
 
+    // Fire-and-forget streak update & possible bonus
+    import("./scoring/StreakService").then((mod) => {
+      mod.streakService
+        .recordLogin(user.id, (user as any).timezone)
+        .catch((e) => console.error("[streak] recordLogin failed", e));
+    });
+
     return {
       user: {
         id: user.id,

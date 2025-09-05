@@ -375,48 +375,7 @@ module.exports = {
       },
     });
 
-    // Add indexes for performance
-    await queryInterface.addIndex("discussion_posts", ["author_id"]);
-    await queryInterface.addIndex("discussion_posts", [
-      "is_deleted",
-      "is_approved",
-    ]);
-    await queryInterface.addIndex("discussion_posts", ["created_at"]);
-    await queryInterface.addIndex("discussion_posts", ["is_market_post"]);
-    await queryInterface.addIndex("discussion_posts", ["upvotes", "downvotes"]);
-
-    await queryInterface.addIndex("discussion_replies", ["post_id"]);
-    await queryInterface.addIndex("discussion_replies", ["author_id"]);
-    await queryInterface.addIndex("discussion_replies", ["parent_reply_id"]);
-    await queryInterface.addIndex("discussion_replies", ["created_at"]);
-
-    await queryInterface.addIndex("post_tags", ["post_id"]);
-    await queryInterface.addIndex("post_tags", ["tag_name"]);
-    await queryInterface.addIndex("post_tags", ["post_id", "tag_name"], {
-      unique: true,
-    });
-
-    await queryInterface.addIndex("user_votes", ["user_id"]);
-    await queryInterface.addIndex("user_votes", ["post_id"]);
-    await queryInterface.addIndex("user_votes", ["reply_id"]);
-    await queryInterface.addIndex("user_votes", ["user_id", "post_id"], {
-      unique: true,
-    });
-    await queryInterface.addIndex("user_votes", ["user_id", "reply_id"], {
-      unique: true,
-    });
-
-    await queryInterface.addIndex("content_reports", [
-      "content_id",
-      "content_type",
-    ]);
-    await queryInterface.addIndex("content_reports", ["reporter_id"]);
-    await queryInterface.addIndex("content_reports", ["status"]);
-    await queryInterface.addIndex(
-      "content_reports",
-      ["content_id", "content_type", "reporter_id"],
-      { unique: true }
-    );
+    // (Indexes moved to migration 031 for clean idempotent handling.)
   },
 
   async down(queryInterface, Sequelize) {
