@@ -1,16 +1,25 @@
 import { Sequelize } from "sequelize";
-import dotenv from "dotenv";
+import * as dotenv from "dotenv";
 
 dotenv.config();
+
+const isTestEnv =
+  process.env.NODE_ENV === "test" || !!process.env.JEST_WORKER_ID;
 
 const sequelize = new Sequelize({
   dialect: "postgres",
   host: process.env.DB_HOST || "localhost",
   port: parseInt(process.env.DB_PORT || "5432"),
-  database: process.env.DB_NAME || "farm_connect_db",
+  database: isTestEnv
+    ? process.env.DB_NAME_TEST || "farm_connect_test"
+    : process.env.DB_NAME || "farm_connect_db",
   username: process.env.DB_USERNAME || "username",
   password: process.env.DB_PASSWORD || "password",
-  logging: process.env.NODE_ENV === "development" ? console.log : false,
+  logging: isTestEnv
+    ? false
+    : process.env.NODE_ENV === "development" && !process.env.QUIET_SQL
+    ? console.log
+    : false,
   pool: {
     max: 10,
     min: 0,

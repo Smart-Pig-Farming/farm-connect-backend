@@ -1,7 +1,7 @@
-import { DataTypes, Model, Optional, Association } from 'sequelize';
-import sequelize from '../config/database';
-import User from './User';
-import BestPracticeTag from './BestPracticeTag';
+import { DataTypes, Model, Optional, Association } from "sequelize";
+import sequelize from "../config/database";
+import User from "./User";
+import BestPracticeTag from "./BestPracticeTag";
 
 // Quiz attributes interface
 export interface QuizAttributes {
@@ -18,11 +18,14 @@ export interface QuizAttributes {
 }
 
 // Creation attributes (id is auto-generated)
-interface QuizCreationAttributes extends Optional<QuizAttributes, 'id' | 'is_active'> {}
+interface QuizCreationAttributes
+  extends Optional<QuizAttributes, "id" | "is_active"> {}
 
 // Quiz model class
-class Quiz extends Model<QuizAttributes, QuizCreationAttributes> 
-  implements QuizAttributes {
+class Quiz
+  extends Model<QuizAttributes, QuizCreationAttributes>
+  implements QuizAttributes
+{
   public id!: number;
   public title!: string;
   public description!: string;
@@ -41,72 +44,76 @@ class Quiz extends Model<QuizAttributes, QuizCreationAttributes>
   };
 }
 
-Quiz.init({
-  id: {
-    type: DataTypes.INTEGER,
-    autoIncrement: true,
-    primaryKey: true,
-  },
-  title: {
-    type: DataTypes.STRING(255),
-    allowNull: false,
-  },
-  description: {
-    type: DataTypes.TEXT,
-    allowNull: false,
-  },
-  duration: {
-    type: DataTypes.INTEGER,
-    allowNull: false,
-    defaultValue: 30, // 30 minutes default
-  },
-  passing_score: {
-    type: DataTypes.INTEGER,
-    allowNull: false,
-    defaultValue: 70, // 70% default
-    validate: {
-      min: 0,
-      max: 100,
+Quiz.init(
+  {
+    id: {
+      type: DataTypes.INTEGER,
+      autoIncrement: true,
+      primaryKey: true,
+    },
+    title: {
+      type: DataTypes.STRING(255),
+      allowNull: false,
+    },
+    description: {
+      type: DataTypes.TEXT,
+      allowNull: false,
+    },
+    duration: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 10, // 10 minutes default (600 seconds per attempt)
+      validate: { min: 1, max: 600 },
+    },
+    passing_score: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      defaultValue: 70, // 70% default
+      validate: {
+        min: 0,
+        max: 100,
+      },
+    },
+    is_active: {
+      type: DataTypes.BOOLEAN,
+      defaultValue: true,
+      allowNull: false,
+    },
+    best_practice_tag_id: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      references: {
+        model: BestPracticeTag,
+        key: "id",
+      },
+    },
+    created_by: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      references: {
+        model: User,
+        key: "id",
+      },
     },
   },
-  is_active: {
-    type: DataTypes.BOOLEAN,
-    defaultValue: true,
-    allowNull: false,
-  },
-  best_practice_tag_id: {
-    type: DataTypes.INTEGER,
-    allowNull: false,
-    references: {
-      model: BestPracticeTag,
-      key: 'id',
-    },
-  },
-  created_by: {
-    type: DataTypes.INTEGER,
-    allowNull: false,
-    references: {
-      model: User,
-      key: 'id',
-    },
-  },
-}, {
-  sequelize,
-  modelName: 'Quiz',
-  tableName: 'quizzes',
-  timestamps: true,
-  underscored: true,
-  indexes: [
-    {
-      fields: ['created_by'],
-    },
-    {
-      fields: ['best_practice_tag_id'],
-    },
-    {
-      fields: ['is_active'],
-    },
-  ],
-});
+  {
+    sequelize,
+    modelName: "Quiz",
+    tableName: "quizzes",
+    timestamps: true,
+    underscored: true,
+    indexes: [
+      {
+        fields: ["created_by"],
+      },
+      {
+        fields: ["best_practice_tag_id"],
+      },
+      {
+        fields: ["is_active"],
+      },
+    ],
+  }
+);
 
 export default Quiz;
