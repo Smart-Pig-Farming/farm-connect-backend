@@ -175,11 +175,33 @@ class App {
     // Cookie parsing middleware (must be before other parsing middleware)
     this.app.use(cookieParser());
 
-    // CORS middleware
+    // CORS middleware - updated to use environment variables
+    const corsOrigins: string[] = [
+      process.env.CORS_ORIGIN,
+      process.env.CLIENT_URL,
+      process.env.FRONTEND_URL,
+      "http://localhost:5173",
+      "http://localhost:3000"
+    ].filter((origin): origin is string => Boolean(origin)); // Remove undefined/null values and type guard
+
+    console.log('CORS Origins configured:', corsOrigins);
+
     this.app.use(
       cors({
-        origin: process.env.FRONTEND_URL || "http://localhost:5173",
+        origin: corsOrigins,
         credentials: true,
+        methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+        allowedHeaders: [
+          'Content-Type', 
+          'Authorization', 
+          'X-Requested-With',
+          'Accept',
+          'Origin',
+          'Access-Control-Request-Method',
+          'Access-Control-Request-Headers'
+        ],
+        exposedHeaders: ['Content-Range', 'X-Content-Range'],
+        optionsSuccessStatus: 200
       })
     );
 

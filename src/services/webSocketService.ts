@@ -245,12 +245,20 @@ export class WebSocketService {
   private io: Server;
 
   constructor(httpServer: HttpServer) {
+    // Configure CORS origins for WebSocket
+    const wsOrigins = [
+      process.env.CORS_ORIGIN,
+      process.env.CLIENT_URL,
+      process.env.FRONTEND_URL,
+      "http://localhost:5173",
+      "http://localhost:3000"
+    ].filter((origin): origin is string => Boolean(origin));
+
+    console.log('WebSocket CORS Origins configured:', wsOrigins);
+
     this.io = new Server(httpServer, {
       cors: {
-        origin:
-          process.env.FRONTEND_URL ||
-          process.env.CLIENT_URL ||
-          "http://localhost:5173",
+        origin: wsOrigins,
         methods: ["GET", "POST"],
         credentials: true,
       },
