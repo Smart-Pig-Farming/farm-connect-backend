@@ -181,29 +181,65 @@ class App {
       process.env.CLIENT_URL,
       process.env.FRONTEND_URL,
       "http://localhost:5173",
-      "http://localhost:3000"
+      "http://localhost:3000",
     ].filter((origin): origin is string => Boolean(origin)); // Remove undefined/null values and type guard
 
-    console.log('CORS Origins configured:', corsOrigins);
+    console.log("CORS Origins configured:", corsOrigins);
 
+    // Enhanced CORS configuration to handle preflight requests
     this.app.use(
       cors({
-        origin: corsOrigins,
+        origin: function (origin, callback) {
+          // Allow requests with no origin (mobile apps, curl, etc.)
+          if (!origin) return callback(null, true);
+
+          // Check if origin is in allowed list
+          if (corsOrigins.includes(origin)) {
+            return callback(null, true);
+          }
+
+          // Log failed CORS attempts for debugging
+          console.log("CORS blocked origin:", origin);
+          const msg =
+            "The CORS policy for this site does not allow access from the specified Origin.";
+          return callback(new Error(msg), false);
+        },
         credentials: true,
-        methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+        methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
         allowedHeaders: [
-          'Content-Type', 
-          'Authorization', 
-          'X-Requested-With',
-          'Accept',
-          'Origin',
-          'Access-Control-Request-Method',
-          'Access-Control-Request-Headers'
+          "Content-Type",
+          "Authorization",
+          "X-Requested-With",
+          "Accept",
+          "Origin",
+          "Access-Control-Request-Method",
+          "Access-Control-Request-Headers",
+          "X-CSRF-Token",
         ],
-        exposedHeaders: ['Content-Range', 'X-Content-Range'],
-        optionsSuccessStatus: 200
+        exposedHeaders: ["Content-Range", "X-Content-Range"],
+        optionsSuccessStatus: 200, // Some legacy browsers choke on 204
+        preflightContinue: false, // Pass control to next handler after preflight
       })
     );
+
+    // Additional explicit preflight handler for complex requests
+    this.app.options("*", (req, res) => {
+      const origin = req.headers.origin;
+      if (origin && corsOrigins.includes(origin)) {
+        res.header("Access-Control-Allow-Origin", origin);
+        res.header(
+          "Access-Control-Allow-Methods",
+          "GET, POST, PUT, DELETE, PATCH, OPTIONS"
+        );
+        res.header(
+          "Access-Control-Allow-Headers",
+          "Content-Type, Authorization, X-Requested-With, Accept, Origin, Access-Control-Request-Method, Access-Control-Request-Headers, X-CSRF-Token"
+        );
+        res.header("Access-Control-Allow-Credentials", "true");
+        res.header("Access-Control-Max-Age", "3600");
+      }
+      res.sendStatus(200);
+    });
 
     // Logging middleware
     this.app.use(morgan("combined"));

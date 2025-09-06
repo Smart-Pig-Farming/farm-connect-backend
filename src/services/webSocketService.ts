@@ -251,10 +251,10 @@ export class WebSocketService {
       process.env.CLIENT_URL,
       process.env.FRONTEND_URL,
       "http://localhost:5173",
-      "http://localhost:3000"
+      "http://localhost:3000",
     ].filter((origin): origin is string => Boolean(origin));
 
-    console.log('WebSocket CORS Origins configured:', wsOrigins);
+    console.log("WebSocket CORS Origins configured:", wsOrigins);
 
     this.io = new Server(httpServer, {
       cors: {
