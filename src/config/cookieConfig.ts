@@ -9,6 +9,9 @@ export interface CookieOptions {
 
 export const getCookieConfig = () => {
   const isProduction = process.env.NODE_ENV === "production";
+  // Allow explicit override of secure flag even in production (needed before HTTPS is enabled)
+  const secureOverride = process.env.COOKIE_SECURE;
+  const secureFlag = secureOverride ? secureOverride === "true" : isProduction; // default to true only if production and no override provided
   // Parse JWT style durations (very small parser supporting m,h,d suffix)
   function parseDuration(str: string | undefined, fallbackMs: number): number {
     if (!str) return fallbackMs;
@@ -36,7 +39,7 @@ export const getCookieConfig = () => {
 
   const baseConfig = {
     httpOnly: true,
-    secure: isProduction ? true : process.env.COOKIE_SECURE === "true",
+    secure: secureFlag,
     sameSite:
       (process.env.COOKIE_SAME_SITE as "strict" | "lax" | "none") ||
       (isProduction ? "strict" : "lax"),
@@ -68,7 +71,11 @@ export const getCookieConfig = () => {
 
 export const clearCookieConfig = {
   httpOnly: true,
-  secure: process.env.NODE_ENV === "production",
+  secure: (() => {
+    const override = process.env.COOKIE_SECURE;
+    if (override) return override === "true";
+    return process.env.NODE_ENV === "production";
+  })(),
   sameSite: "lax" as const,
   path: "/",
   maxAge: 0, // Expire immediately
