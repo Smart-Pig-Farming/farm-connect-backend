@@ -4,6 +4,8 @@ import helmet from "helmet";
 import morgan from "morgan";
 import cookieParser from "cookie-parser";
 import dotenv from "dotenv";
+import swaggerUi from "swagger-ui-express";
+import swaggerSpec from "./config/swagger";
 import { testConnection } from "./config/database";
 import { createServer, Server as HttpServer } from "http";
 import { initializeWebSocket } from "./services/webSocketService";
@@ -250,6 +252,27 @@ class App {
   }
 
   private initializeRoutes(): void {
+    // Swagger documentation routes
+    this.app.use(
+      "/api-docs",
+      swaggerUi.serve,
+      swaggerUi.setup(swaggerSpec, {
+        customCss: ".swagger-ui .topbar { display: none }",
+        customSiteTitle: "Farm Connect API Documentation",
+        customfavIcon: "/favicon.ico",
+        swaggerOptions: {
+          persistAuthorization: true,
+          displayRequestDuration: true,
+        },
+      })
+    );
+
+    // Swagger JSON endpoint
+    this.app.get("/api-docs.json", (req: Request, res: Response) => {
+      res.setHeader("Content-Type", "application/json");
+      res.send(swaggerSpec);
+    });
+
     // Health check route
     this.app.use("/api/health", healthRoutes);
 
@@ -289,11 +312,20 @@ class App {
         message: "Farm Connect Backend API",
         version: "1.0.0",
         timestamp: new Date().toISOString(),
+        documentation: `${req.protocol}://${req.get("host")}/api-docs`,
         endpoints: {
           health: "/api/health",
           auth: "/api/auth",
           admin: "/api/admin",
+          discussions: "/api/discussions",
+          moderation: "/api/moderation",
+          notifications: "/api/notifications",
+          score: "/api/score",
+          bestPractices: "/api/best-practices",
+          quizzes: "/api/quizzes",
+          chat: "/api/chat",
           test: "/api/test",
+          docs: "/api-docs",
         },
       });
     });
