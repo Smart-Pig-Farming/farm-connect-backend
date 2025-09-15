@@ -1,7 +1,25 @@
 import { Op, WhereOptions, FindOptions } from "sequelize";
+import sequelize from "../config/database";
 import User, { UserAttributes } from "../models/User";
 import Role from "../models/Role";
 import Level from "../models/Level";
+import {
+  Quiz,
+  QuizAttempt,
+  PasswordResetToken,
+  Content,
+  ContentReaction,
+  BestPracticeContent,
+  DiscussionPost,
+  DiscussionReply,
+  UserVote,
+  ContentReport,
+  ReportRateLimit,
+  BestPracticeRead,
+  Notification,
+  ScoreEvent,
+  UserScoreTotal,
+} from "../models";
 
 // Interface for user search and filtering
 export interface UserFilters {
@@ -134,6 +152,29 @@ class UserService {
         });
       }
 
+      // Filter out system accounts (placeholder and test users)
+      whereConditions.push({
+        email: {
+          [Op.notIn]: ["deleted-user@placeholder.local"],
+        },
+      });
+
+      // Filter out test users (emails containing 'test.com' or usernames starting with 'testuser')
+      whereConditions.push({
+        [Op.and]: [
+          {
+            email: {
+              [Op.notILike]: "%@test.com",
+            },
+          },
+          {
+            username: {
+              [Op.notILike]: "testuser%",
+            },
+          },
+        ],
+      });
+
       // Combine all where conditions with AND
       const where: WhereOptions =
         whereConditions.length > 0 ? { [Op.and]: whereConditions } : {};
@@ -254,13 +295,207 @@ class UserService {
    * Delete user
    */
   async deleteUser(id: number): Promise<boolean> {
+    const transaction = await sequelize.transaction();
+
     try {
-      const deletedCount = await User.destroy({
-        where: { id },
+      // Models are now imported at the top of the file
+
+      // First, check if user exists
+      const user = await User.findByPk(id, { transaction });
+      if (!user) {
+        await transaction.rollback();
+        return false;
+      }
+
+      console.log(`Starting deletion process for user ID ${id}`);
+
+      // Strategy: Delete records that can be safely removed,
+      // and set foreign keys to NULL where we want to preserve content
+
+      // 1. Delete user-specific records (safe to delete)
+      await PasswordResetToken.destroy({ where: { userId: id }, transaction });
+      await QuizAttempt.destroy({ where: { user_id: id }, transaction });
+      await ContentReaction.destroy({ where: { user_id: id }, transaction });
+      await UserVote.destroy({ where: { user_id: id }, transaction });
+      await ReportRateLimit.destroy({
+        where: { reporter_id: id },
+        transaction,
+      });
+      await BestPracticeRead.destroy({ where: { user_id: id }, transaction });
+      await Notification.destroy({ where: { user_id: id }, transaction });
+      await ScoreEvent.destroy({ where: { user_id: id }, transaction });
+      await ScoreEvent.destroy({ where: { actor_user_id: id }, transaction });
+      await UserScoreTotal.destroy({ where: { user_id: id }, transaction });
+
+      // 2. Handle content preservation - set foreign keys to NULL or reassign
+      // For quizzes created by this user - we'll need to decide on strategy
+      const userQuizzes = await Quiz.findAll({
+        where: { created_by: id },
+        transaction,
       });
 
+      if (userQuizzes.length > 0) {
+        console.log(
+          `Found ${userQuizzes.length} quizzes created by user ${id}`
+        );
+
+        // Strategy 1: Find an admin user to reassign quizzes to
+        const adminUser = await User.findOne({
+          include: [
+            {
+              model: Role,
+              as: "role",
+              where: { name: "admin" },
+            },
+          ],
+          transaction,
+        });
+
+        if (adminUser) {
+          // Reassign quizzes to admin
+          await Quiz.update(
+            { created_by: adminUser.id },
+            { where: { created_by: id }, transaction }
+          );
+          console.log(
+            `Reassigned ${userQuizzes.length} quizzes to admin user ${adminUser.id}`
+          );
+        } else {
+          // If no admin found, we could either delete the quizzes or throw an error
+          // For now, let's delete them as they're orphaned
+          console.log(
+            `No admin user found, deleting ${userQuizzes.length} quizzes`
+          );
+          await Quiz.destroy({ where: { created_by: id }, transaction });
+        }
+      }
+
+      // 3. Handle other content - find or create a "Deleted User" placeholder
+      let deletedUserPlaceholder = await User.findOne({
+        where: { email: "deleted-user@placeholder.local" },
+        transaction,
+      });
+
+      if (!deletedUserPlaceholder) {
+        // Create a placeholder "Deleted User" account
+        deletedUserPlaceholder = await User.create(
+          {
+            email: "deleted-user@placeholder.local",
+            username: "deleted-user",
+            password: "placeholder-password-" + Date.now(),
+            firstname: "Deleted",
+            lastname: "User",
+            role_id: 1, // Assuming role_id 1 is a basic user role
+            level_id: 1, // Assuming level_id 1 is a basic level
+            is_verified: true,
+            is_locked: true, // Lock this account so it can't be used for login
+            points: 0,
+          },
+          { transaction }
+        );
+        console.log(
+          `Created placeholder user ${deletedUserPlaceholder.id} for content reassignment`
+        );
+      }
+
+      // Reassign content to placeholder user instead of setting to NULL
+      const contentCount = await Content.count({
+        where: { user_id: id },
+        transaction,
+      });
+      if (contentCount > 0) {
+        await Content.update(
+          { user_id: deletedUserPlaceholder.id },
+          { where: { user_id: id }, transaction }
+        );
+        console.log(
+          `Reassigned ${contentCount} content records to placeholder user`
+        );
+      }
+
+      const bestPracticeCount = await BestPracticeContent.count({
+        where: { created_by: id },
+        transaction,
+      });
+      if (bestPracticeCount > 0) {
+        await BestPracticeContent.update(
+          { created_by: deletedUserPlaceholder.id },
+          { where: { created_by: id }, transaction }
+        );
+        console.log(
+          `Reassigned ${bestPracticeCount} best practice content records to placeholder user`
+        );
+      }
+
+      const discussionPostCount = await DiscussionPost.count({
+        where: { author_id: id },
+        transaction,
+      });
+      if (discussionPostCount > 0) {
+        await DiscussionPost.update(
+          { author_id: deletedUserPlaceholder.id },
+          { where: { author_id: id }, transaction }
+        );
+        console.log(
+          `Reassigned ${discussionPostCount} discussion posts to placeholder user`
+        );
+      }
+
+      const discussionReplyCount = await DiscussionReply.count({
+        where: { author_id: id },
+        transaction,
+      });
+      if (discussionReplyCount > 0) {
+        await DiscussionReply.update(
+          { author_id: deletedUserPlaceholder.id },
+          { where: { author_id: id }, transaction }
+        );
+        console.log(
+          `Reassigned ${discussionReplyCount} discussion replies to placeholder user`
+        );
+      }
+
+      // 4. Handle reports - reassign to placeholder user where user was reporter
+      const reportCount = await ContentReport.count({
+        where: { reporter_id: id },
+        transaction,
+      });
+      if (reportCount > 0) {
+        await ContentReport.update(
+          { reporter_id: deletedUserPlaceholder.id },
+          { where: { reporter_id: id }, transaction }
+        );
+        console.log(`Reassigned ${reportCount} reports to placeholder user`);
+      }
+
+      // For moderator_id, we can leave it undefined (remove the moderator assignment)
+      const moderatedReportCount = await ContentReport.count({
+        where: { moderator_id: id },
+        transaction,
+      });
+      if (moderatedReportCount > 0) {
+        await ContentReport.update(
+          { moderator_id: undefined },
+          { where: { moderator_id: id }, transaction }
+        );
+        console.log(
+          `Removed moderator assignment from ${moderatedReportCount} reports`
+        );
+      }
+
+      // 5. Finally, delete the user
+      const deletedCount = await User.destroy({
+        where: { id },
+        transaction,
+      });
+
+      await transaction.commit();
+      console.log(
+        `Successfully deleted user ${id} and handled all related records`
+      );
       return deletedCount > 0;
     } catch (error) {
+      await transaction.rollback();
       console.error("Error deleting user:", error);
       throw error;
     }
