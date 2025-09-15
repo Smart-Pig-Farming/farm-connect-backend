@@ -14,13 +14,19 @@
  *           example: 123
  *         type:
  *           type: string
- *           enum: [
- *             reply_to_post, reply_to_reply, post_liked, reply_liked,
- *             mention, quiz_available, best_practice_published,
- *             moderation_decision, system_announcement, score_milestone
- *           ]
- *           example: "reply_to_post"
  *           description: "Type of notification"
+ *           example: "reply_to_post"
+ *           enum:
+ *             - reply_to_post
+ *             - reply_to_reply
+ *             - post_liked
+ *             - reply_liked
+ *             - mention
+ *             - quiz_available
+ *             - best_practice_published
+ *             - moderation_decision
+ *             - system_announcement
+ *             - score_milestone
  *         title:
  *           type: string
  *           maxLength: 255
@@ -157,17 +163,26 @@ router.use(authenticateWithCookies);
  *         name: type
  *         schema:
  *           type: string
- *           enum: [
- *             reply_to_post, reply_to_reply, post_liked, reply_liked,
- *             mention, quiz_available, best_practice_published,
- *             moderation_decision, system_announcement, score_milestone
- *           ]
+ *           enum:
+ *             - reply_to_post
+ *             - reply_to_reply
+ *             - post_liked
+ *             - reply_liked
+ *             - mention
+ *             - quiz_available
+ *             - best_practice_published
+ *             - moderation_decision
+ *             - system_announcement
+ *             - score_milestone
  *         description: Filter by notification type
  *       - in: query
  *         name: read_status
  *         schema:
  *           type: string
- *           enum: [all, read, unread]
+ *           enum:
+ *             - all
+ *             - read
+ *             - unread
  *           default: all
  *         description: Filter by read status
  *       - in: query
@@ -215,7 +230,7 @@ router.use(authenticateWithCookies);
  *                       example: 5
  *       401:
  *         description: Authentication required
-
+ */
 /**
  * @swagger
  * /api/notifications/unread-count:
@@ -250,7 +265,7 @@ router.use(authenticateWithCookies);
  *                   description: "Timestamp of the most recent notification"
  *       401:
  *         description: Authentication required
-
+ */
 /**
  * @swagger
  * /api/notifications/mark-read:
@@ -308,7 +323,7 @@ router.use(authenticateWithCookies);
  *         description: Authentication required
  *       403:
  *         description: CSRF token required
-
+ */
 /**
  * @swagger
  * /api/notifications/mark-all-read:
@@ -336,11 +351,17 @@ router.use(authenticateWithCookies);
  *                 type: array
  *                 items:
  *                   type: string
- *                   enum: [
- *                     reply_to_post, reply_to_reply, post_liked, reply_liked,
- *                     mention, quiz_available, best_practice_published,
- *                     moderation_decision, system_announcement, score_milestone
- *                   ]
+ *                   enum:
+ *                     - reply_to_post
+ *                     - reply_to_reply
+ *                     - post_liked
+ *                     - reply_liked
+ *                     - mention
+ *                     - quiz_available
+ *                     - best_practice_published
+ *                     - moderation_decision
+ *                     - system_announcement
+ *                     - score_milestone
  *                 description: "Optional: only mark notifications of these types as read"
  *     responses:
  *       200:
@@ -361,7 +382,7 @@ router.use(authenticateWithCookies);
  *         description: Authentication required
  *       403:
  *         description: CSRF token required
-
+ */
 /**
  * @swagger
  * /api/notifications/clear-all:
@@ -390,11 +411,17 @@ router.use(authenticateWithCookies);
  *                 type: array
  *                 items:
  *                   type: string
- *                   enum: [
- *                     reply_to_post, reply_to_reply, post_liked, reply_liked,
- *                     mention, quiz_available, best_practice_published,
- *                     moderation_decision, system_announcement, score_milestone
- *                   ]
+ *                   enum:
+ *                     - reply_to_post
+ *                     - reply_to_reply
+ *                     - post_liked
+ *                     - reply_liked
+ *                     - mention
+ *                     - quiz_available
+ *                     - best_practice_published
+ *                     - moderation_decision
+ *                     - system_announcement
+ *                     - score_milestone
  *                 description: "Optional: only delete notifications of these types"
  *               read_only:
  *                 type: boolean

@@ -11,8 +11,10 @@
  *           example: "123e4567-e89b-12d3-a456-426614174000"
  *         content_type:
  *           type: string
- *           enum: [post, reply]
  *           example: "post"
+ *           enum:
+ *             - post
+ *             - reply
  *         content_id:
  *           type: string
  *           format: uuid
@@ -22,16 +24,25 @@
  *           example: 123
  *         reason:
  *           type: string
- *           enum: [inappropriate, spam, fraudulent, misinformation, technical, other]
  *           example: "inappropriate"
+ *           enum:
+ *             - inappropriate
+ *             - spam
+ *             - fraudulent
+ *             - misinformation
+ *             - technical
+ *             - other
  *         details:
  *           type: string
  *           maxLength: 1000
  *           example: "This post contains offensive language"
  *         status:
  *           type: string
- *           enum: [pending, reviewed, resolved]
  *           example: "pending"
+ *           enum:
+ *             - pending
+ *             - reviewed
+ *             - resolved
  *         created_at:
  *           type: string
  *           format: date-time
@@ -84,8 +95,11 @@
  *           type: integer
  *         decision:
  *           type: string
- *           enum: [retained, deleted, warned]
  *           example: "retained"
+ *           enum:
+ *             - retained
+ *             - deleted
+ *             - warned
  *         justification:
  *           type: string
  *           maxLength: 1000
@@ -104,7 +118,13 @@
  *       properties:
  *         reason:
  *           type: string
- *           enum: [inappropriate, spam, fraudulent, misinformation, technical, other]
+ *           enum:
+ *             - inappropriate
+ *             - spam
+ *             - fraudulent
+ *             - misinformation
+ *             - technical
+ *             - other
  *           example: "inappropriate"
  *           description: "Reason for reporting the content"
  *         details:
@@ -119,9 +139,12 @@
  *       properties:
  *         decision:
  *           type: string
- *           enum: [retained, deleted, warned]
- *           example: "retained"
  *           description: "Moderation decision"
+ *           example: "retained"
+ *           enum:
+ *             - retained
+ *             - deleted
+ *             - warned
  *         justification:
  *           type: string
  *           maxLength: 1000
@@ -193,7 +216,7 @@ const router = Router();
  *         description: Post not found
  *       409:
  *         description: Already reported by this user
-
+ */
 /**
  * @swagger
  * /api/moderation/replies/{id}/report:
@@ -243,7 +266,7 @@ const router = Router();
  *         description: Reply not found
  *       409:
  *         description: Already reported by this user
-
+ */
 /**
  * @swagger
  * /api/moderation/pending:
@@ -281,13 +304,22 @@ const router = Router();
  *         name: priority
  *         schema:
  *           type: string
- *           enum: [high, medium, low]
+ *           enum:
+ *             - high
+ *             - medium
+ *             - low
  *         description: Filter by priority level
  *       - in: query
  *         name: reason
  *         schema:
  *           type: string
- *           enum: [inappropriate, spam, fraudulent, misinformation, technical, other]
+ *           enum:
+ *             - inappropriate
+ *             - spam
+ *             - fraudulent
+ *             - misinformation
+ *             - technical
+ *             - other
  *         description: Filter by report reason
  *     responses:
  *       200:
@@ -331,7 +363,7 @@ const router = Router();
  *         description: Authentication required
  *       403:
  *         description: Insufficient permissions (requires moderation permissions)
-
+ */
 /**
  * @swagger
  * /api/moderation/posts/{postId}/decision:
@@ -385,7 +417,7 @@ const router = Router();
  *         description: Post not found or no pending reports
  *       409:
  *         description: Post already has a moderation decision
-
+ */
 /**
  * @swagger
  * /api/moderation/history:
@@ -429,7 +461,10 @@ const router = Router();
  *         name: decision
  *         schema:
  *           type: string
- *           enum: [retained, deleted, warned]
+ *           enum:
+ *             - retained
+ *             - deleted
+ *             - warned
  *         description: Filter by decision type
  *       - in: query
  *         name: moderator_id
