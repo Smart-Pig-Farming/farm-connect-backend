@@ -51,6 +51,23 @@ async function populateQuizQuestions() {
     console.log(`✅ Found User ID: ${user.id}`);
     console.log(`✅ Available tags: ${tags.map((t) => t.name).join(", ")}\n`);
 
+    // Fix: Update quiz category to Environment Mgmt for frontend compatibility
+    const envMgmtTag = tags.find((tag) => tag.name === "Environment Mgmt");
+    if (envMgmtTag && quiz.best_practice_tag_id !== envMgmtTag.id) {
+      console.log(
+        `🔧 Updating quiz category to "Environment Mgmt" for frontend compatibility...`
+      );
+      await quiz.update(
+        {
+          best_practice_tag_id: envMgmtTag.id,
+        },
+        { transaction }
+      );
+      console.log(
+        `✅ Quiz category updated to Environment Mgmt (ID: ${envMgmtTag.id})\n`
+      );
+    }
+
     // Define all 50 questions with their data
     const questionsData: QuestionData[] = [
       // SINGLE CHOICE QUESTIONS (1-25)
@@ -586,16 +603,6 @@ async function populateQuizQuestions() {
     // Process each question
     for (let i = 0; i < questionsData.length; i++) {
       const questionData = questionsData[i];
-
-      // Find the best practice tag ID (fallback to quiz's tag if not found)
-      let bestPracticeTagId = quiz.best_practice_tag_id; // Default fallback
-
-      if (questionData.category) {
-        const categoryTagId = tagMap.get(questionData.category.toLowerCase());
-        if (categoryTagId) {
-          bestPracticeTagId = categoryTagId;
-        }
-      }
 
       // Map question types to the expected format
       let questionType: "mcq" | "multi" | "truefalse";
