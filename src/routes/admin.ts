@@ -114,8 +114,12 @@
  *           example: "Uwimana"
  *         role:
  *           type: string
- *           enum: [farmer, moderator, admin, expert]
  *           example: "farmer"
+ *           enum:
+ *             - farmer
+ *             - moderator
+ *             - admin
+ *             - expert
  *         farm_name:
  *           type: string
  *           example: "Green Valley Farm"
@@ -165,8 +169,12 @@
  *           example: "Uwimana"
  *         role:
  *           type: string
- *           enum: [farmer, moderator, admin, expert]
  *           example: "farmer"
+ *           enum:
+ *             - farmer
+ *             - moderator
+ *             - admin
+ *             - expert
  *         farm_name:
  *           type: string
  *           maxLength: 100
@@ -1057,7 +1065,11 @@ router.get(
  *         name: role
  *         schema:
  *           type: string
- *           enum: [farmer, moderator, admin, expert]
+ *           enum:
+ *             - farmer
+ *             - moderator
+ *             - admin
+ *             - expert
  *         description: Filter by user role
  *       - in: query
  *         name: province
@@ -1083,14 +1095,20 @@ router.get(
  *         name: sortBy
  *         schema:
  *           type: string
- *           enum: [created_at, last_login, name, email]
+ *           enum:
+ *             - created_at
+ *             - last_login
+ *             - name
+ *             - email
  *           default: created_at
  *         description: Sort field
  *       - in: query
  *         name: sortOrder
  *         schema:
  *           type: string
- *           enum: [asc, desc]
+ *           enum:
+ *             - asc
+ *             - desc
  *           default: desc
  *         description: Sort order
  *     responses:
@@ -1120,7 +1138,7 @@ router.get(
  *         description: Authentication required
  *       403:
  *         description: Insufficient permissions (requires MANAGE:USERS)
- *   
+ *
  *   post:
  *     summary: Create new user
  *     description: |
@@ -1158,7 +1176,7 @@ router.get(
  *         description: Authentication required
  *       403:
  *         description: Insufficient permissions
-
+ */
 /**
  * @swagger
  * /api/admin/users/{id}:
@@ -1188,7 +1206,7 @@ router.get(
  *         description: Insufficient permissions (requires MANAGE:USERS)
  *       404:
  *         description: User not found
- *   
+ *
  *   put:
  *     summary: Update user
  *     description: Update user information with admin privileges
@@ -1225,7 +1243,11 @@ router.get(
  *                 maxLength: 50
  *               role:
  *                 type: string
- *                 enum: [farmer, moderator, admin, expert]
+ *                 enum:
+ *                   - farmer
+ *                   - moderator
+ *                   - admin
+ *                   - expert
  *               farm_name:
  *                 type: string
  *                 maxLength: 100
@@ -1254,7 +1276,7 @@ router.get(
  *         description: Insufficient permissions
  *       404:
  *         description: User not found
- *   
+ *
  *   delete:
  *     summary: Delete user
  *     description: |
@@ -1288,7 +1310,7 @@ router.get(
  *         description: Insufficient permissions
  *       404:
  *         description: User not found
-
+ */
 /**
  * @swagger
  * /api/admin/users/{id}/lock:
@@ -1343,7 +1365,7 @@ router.get(
  *         description: Insufficient permissions
  *       404:
  *         description: User not found
-
+ */
 /**
  * @swagger
  * /api/admin/users/{id}/verify:
@@ -1380,7 +1402,7 @@ router.get(
  *         description: User not found
  *       409:
  *         description: User already verified
-
+ */
 /**
  * @swagger
  * /api/admin/users/{id}/resend-credentials:
@@ -1419,7 +1441,7 @@ router.get(
  *         description: User not found
  *       500:
  *         description: Failed to send email
-
+ */
 /**
  * @swagger
  * /api/admin/users-stats:
@@ -1561,7 +1583,7 @@ router.get(
  *         description: Post not found
  *       409:
  *         description: Post already approved or rejected
-
+ */
 /**
  * @swagger
  * /api/admin/discussions/posts/{id}/reject:
@@ -1592,7 +1614,13 @@ router.get(
  *             properties:
  *               reason:
  *                 type: string
- *                 enum: [spam, inappropriate, off-topic, misinformation, harassment, other]
+ *                 enum:
+ *                   - spam
+ *                   - inappropriate
+ *                   - off-topic
+ *                   - misinformation
+ *                   - harassment
+ *                   - other
  *                 example: "inappropriate"
  *                 description: "Reason for rejection"
  *               moderator_comment:
