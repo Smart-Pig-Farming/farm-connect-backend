@@ -1,5 +1,5 @@
-import dotenv from 'dotenv';
-import { getCookieConfig } from '../config/cookieConfig';
+import dotenv from "dotenv";
+import { getCookieConfig } from "../config/cookieConfig";
 
 // Load environment variables
 dotenv.config();
