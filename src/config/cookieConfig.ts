@@ -44,19 +44,15 @@ export const getCookieConfig = () => {
     30 * 24 * 60 * 60 * 1000
   );
 
-  // For IP-based same-origin setups, don't set domain
-  // This allows cookies to work properly with IP addresses
-  const shouldSetDomain =
-    process.env.COOKIE_DOMAIN &&
-    !process.env.COOKIE_DOMAIN.match(/^\d+\.\d+\.\d+\.\d+$/); // Not an IP address
-
   const baseConfig = {
     httpOnly: true,
     secure: secureFlag,
     sameSite:
       (process.env.COOKIE_SAME_SITE as "strict" | "lax" | "none") ||
-      (isProduction ? "lax" : "lax"),
-    domain: shouldSetDomain ? process.env.COOKIE_DOMAIN : undefined,
+      (isProduction ? "lax" : "lax"), // Changed from "strict" to "lax" for production
+    domain: isProduction
+      ? process.env.COOKIE_DOMAIN // Remove hardcoded IP fallback
+      : undefined,
     path: "/",
   };
 
@@ -65,25 +61,15 @@ export const getCookieConfig = () => {
 
   // Additional debugging for production issues
   if (isProduction) {
-    const envDomain = process.env.COOKIE_DOMAIN;
-    const isIpAddress = envDomain?.match(/^\d+\.\d+\.\d+\.\d+$/);
-
     console.log("🔍 Production Cookie Debug:");
-    console.log("  - ENV COOKIE_DOMAIN:", envDomain);
-    console.log("  - Is IP Address:", !!isIpAddress);
-    console.log("  - Final Domain:", baseConfig.domain);
+    console.log("  - Domain:", baseConfig.domain);
     console.log("  - Secure:", baseConfig.secure);
     console.log("  - SameSite:", baseConfig.sameSite);
-    console.log(
-      "  - Setup Type:",
-      baseConfig.domain ? "Cross-domain" : "Same-origin"
-    );
-
-    if (isIpAddress) {
-      console.log(
-        "⚠️  IP address detected - using same-origin cookies (no domain set)"
-      );
-    }
+    console.log("  - Will cookies work?", {
+      domainSet: !!baseConfig.domain,
+      httpsRequired: baseConfig.secure,
+      crossSitePolicy: baseConfig.sameSite,
+    });
   }
 
   return {
